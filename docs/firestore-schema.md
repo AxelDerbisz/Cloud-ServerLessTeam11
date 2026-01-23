@@ -104,27 +104,6 @@ else:
 
 ---
 
-## Design Decisions
-
-### Why 50x50 chunks?
-- Each pixel ≈ 100-150 bytes
-- 50×50 = 2,500 pixels × 150 bytes = ~375KB max per document
-- Well under Firestore's 1MB document limit
-- Balanced read/write tradeoff
-
-### Why sparse storage?
-- Only store pixels that have been placed
-- Supports "infinite" canvas without pre-allocation
-- Cost-effective: no storage for empty space
-
-### Why palette index instead of hex color?
-- Smaller storage footprint
-- Consistent visual aesthetic
-- Easy validation (check if index exists)
-- Palette can be changed per session
-
----
-
 ## Visual Diagram
 
 ```
@@ -146,6 +125,7 @@ Firestore
 │
 └── users/
     ├── 123456789
+    │   ├── username: "PlayerOne"
     │   ├── pixelCount: 5
     │   └── windowStart: 1706012000
     └── ...
