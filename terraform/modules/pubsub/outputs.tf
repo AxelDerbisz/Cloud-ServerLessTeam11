@@ -1,0 +1,24 @@
+output "pixel_events_topic" {
+  description = "Pixel events topic name"
+  value       = google_pubsub_topic.pixel_events.name
+}
+
+output "discord_commands_topic" {
+  description = "Discord commands topic name"
+  value       = google_pubsub_topic.discord_commands.name
+}
+
+output "session_events_topic" {
+  description = "Session events topic name"
+  value       = google_pubsub_topic.session_events.name
+}
+
+output "snapshot_events_topic" {
+  description = "Snapshot events topic name"
+  value       = google_pubsub_topic.snapshot_events.name
+}
+
+output "dead_letter_topic" {
+  description = "Dead letter topic name"
+  value       = google_pubsub_topic.dead_letter.name
+}
