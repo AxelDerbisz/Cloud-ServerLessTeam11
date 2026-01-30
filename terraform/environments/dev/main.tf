@@ -138,13 +138,21 @@ module "discord_proxy" {
 
   environment_variables = {
     PROJECT_ID             = var.project_id
-    DISCORD_COMMANDS_TOPIC = module.pubsub.discord_commands_topic
+    PIXEL_EVENTS_TOPIC     = module.pubsub.pixel_events_topic
+    SNAPSHOT_EVENTS_TOPIC  = module.pubsub.snapshot_events_topic
+    SESSION_EVENTS_TOPIC   = module.pubsub.session_events_topic
+    ADMIN_ROLE_IDS         = var.admin_role_ids
   }
 
   secret_environment_variables = [
     {
       key     = "DISCORD_PUBLIC_KEY"
       secret  = "discord-public-key"
+      version = "latest"
+    },
+    {
+      key     = "DISCORD_BOT_TOKEN"
+      secret  = "discord-bot-token"
       version = "latest"
     }
   ]
@@ -252,8 +260,17 @@ module "pixel_worker" {
   timeout               = 120
 
   environment_variables = {
-    PROJECT_ID = var.project_id
+    PROJECT_ID         = var.project_id
+    PUBLIC_PIXEL_TOPIC = module.pubsub.public_pixel_topic
   }
+
+  secret_environment_variables = [
+    {
+      key     = "DISCORD_BOT_TOKEN"
+      secret  = "discord-bot-token"
+      version = "latest"
+    }
+  ]
 
   labels = {
     function_type = "worker"
@@ -357,6 +374,14 @@ module "session_worker" {
   environment_variables = {
     PROJECT_ID = var.project_id
   }
+
+  secret_environment_variables = [
+    {
+      key     = "DISCORD_BOT_TOKEN"
+      secret  = "discord-bot-token"
+      version = "latest"
+    }
+  ]
 
   labels = {
     function_type = "worker"

@@ -109,6 +109,35 @@ async function postToDiscord(channelId, imageUrl, pixelCount) {
   }
 }
 
+async function sendDiscordFollowUp(applicationId, token, content) {
+  if (!applicationId || !token || !DISCORD_BOT_TOKEN) {
+    console.log('Discord follow-up skipped: missing credentials');
+    return false;
+  }
+
+  try {
+    const response = await fetch(
+      `${DISCORD_API_ENDPOINT}/webhooks/${applicationId}/${token}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bot ${DISCORD_BOT_TOKEN}`
+        },
+        body: JSON.stringify({ content })
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Discord API error: ${response.status}`);
+    }
+    return true;
+  } catch (error) {
+    console.error('Failed to send Discord follow-up:', error);
+    return false;
+  }
+}
+
 functions.cloudEvent('handler', async (cloudEvent) => {
   console.log('Snapshot request received');
 
@@ -116,7 +145,7 @@ functions.cloudEvent('handler', async (cloudEvent) => {
     const data = cloudEvent.data.message.data;
     const messageData = JSON.parse(Buffer.from(data, 'base64').toString());
 
-    const { channelId } = messageData;
+    const { channelId, interactionToken, applicationId } = messageData;
 
     // Get session info
     const sessionDoc = await firestore.collection('sessions').doc('current').get();
@@ -157,9 +186,24 @@ functions.cloudEvent('handler', async (cloudEvent) => {
       }
     }
 
+    // Send follow-up to complete the interaction
+    if (interactionToken && applicationId) {
+      await sendDiscordFollowUp(applicationId, interactionToken, `✅ Snapshot generated with ${pixels.length} pixels`);
+    }
+
     console.log('Snapshot generation complete');
   } catch (error) {
     console.error('Error generating snapshot:', error);
+    // Send error follow-up if possible
+    try {
+      const data = cloudEvent.data.message.data;
+      const messageData = JSON.parse(Buffer.from(data, 'base64').toString());
+      if (messageData.interactionToken && messageData.applicationId) {
+        await sendDiscordFollowUp(messageData.applicationId, messageData.interactionToken, `❌ Failed to generate snapshot: ${error.message}`);
+      }
+    } catch (e) {
+      console.error('Failed to send error follow-up:', e);
+    }
     throw error; // Trigger retry
   }
 });

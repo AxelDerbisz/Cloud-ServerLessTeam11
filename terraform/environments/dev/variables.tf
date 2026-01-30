@@ -27,3 +27,9 @@ variable "placeholder_source_path" {
   type        = string
   default     = "../../../scripts/placeholder.zip"
 }
+
+variable "admin_role_ids" {
+  description = "Comma-separated list of Discord role IDs that have admin permissions"
+  type        = string
+  default     = ""
+}

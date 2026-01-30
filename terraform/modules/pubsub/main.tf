@@ -25,6 +25,11 @@ resource "google_pubsub_topic" "snapshot_events" {
   name = "snapshot-events"
 }
 
+# Public pixel topic (for real-time web client updates)
+resource "google_pubsub_topic" "public_pixel" {
+  name = "public-pixel"
+}
+
 # Pixel worker subscription
 resource "google_pubsub_subscription" "pixel_worker" {
   name  = "pixel-worker-sub"

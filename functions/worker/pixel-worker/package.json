@@ -7,8 +7,9 @@
     "start": "functions-framework --target=handler --signature-type=cloudevent"
   },
   "dependencies": {
+    "@google-cloud/firestore": "^7.0.0",
     "@google-cloud/functions-framework": "^3.3.0",
-    "@google-cloud/firestore": "^7.0.0"
+    "@google-cloud/pubsub": "^4.0.0"
   },
   "engines": {
     "node": ">=20.0.0"
