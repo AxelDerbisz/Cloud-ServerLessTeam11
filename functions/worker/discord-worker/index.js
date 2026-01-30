@@ -1,13 +1,3 @@
-/**
- * Discord Worker Function
- *
- * Pub/Sub-triggered function that:
- * 1. Processes Discord slash commands
- * 2. Validates permissions for admin commands
- * 3. Sends responses back to Discord
- * 4. Triggers other events (snapshot, session)
- */
-
 const functions = require('@google-cloud/functions-framework');
 const { Firestore } = require('@google-cloud/firestore');
 const { PubSub } = require('@google-cloud/pubsub');
@@ -17,7 +7,7 @@ const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const SNAPSHOT_EVENTS_TOPIC = process.env.SNAPSHOT_EVENTS_TOPIC;
 const SESSION_EVENTS_TOPIC = process.env.SESSION_EVENTS_TOPIC;
 
-const firestore = new Firestore({ projectId: PROJECT_ID });
+const firestore = new Firestore({ projectId: PROJECT_ID, databaseId: 'team11-database' });
 const pubsub = new PubSub({ projectId: PROJECT_ID });
 
 const DISCORD_API_ENDPOINT = 'https://discord.com/api/v10';
@@ -75,15 +65,37 @@ async function handleDraw(interaction) {
   const userId = interaction.member.user.id;
   const username = interaction.member.user.username;
 
-  // TODO: Validate and place pixel
-  // For now, just acknowledge
-  await sendFollowUp(
-    interaction.application_id,
-    interaction.token,
-    `Pixel placement at (${x}, ${y}) with color ${color} is being processed...`
-  );
+  try {
+    // Normalize color (remove # if present)
+    const normalizedColor = color.replace('#', '').toUpperCase();
 
-  console.log(`Draw command: (${x}, ${y}) = ${color} by ${username}`);
+    // Place pixel in Firestore
+    const pixelId = `${x}_${y}`;
+    await firestore.collection('pixels').doc(pixelId).set({
+      x: parseInt(x),
+      y: parseInt(y),
+      color: normalizedColor,
+      userId: userId,
+      username: username,
+      placedAt: new Date().toISOString(),
+      source: 'discord'
+    });
+
+    await sendFollowUp(
+      interaction.application_id,
+      interaction.token,
+      `✅ Pixel placed at (${x}, ${y}) with color #${normalizedColor} by ${username}`
+    );
+
+    console.log(`Pixel placed: (${x}, ${y}) = #${normalizedColor} by ${username}`);
+  } catch (error) {
+    console.error('Error placing pixel:', error);
+    await sendFollowUp(
+      interaction.application_id,
+      interaction.token,
+      `❌ Failed to place pixel: ${error.message}`
+    );
+  }
 }
 
 /**

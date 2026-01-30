@@ -9,7 +9,7 @@
 
 const functions = require('@google-cloud/functions-framework');
 const { PubSub } = require('@google-cloud/pubsub');
-const crypto = require('crypto');
+const nacl = require('tweetnacl');
 
 const PROJECT_ID = process.env.PROJECT_ID;
 const DISCORD_COMMANDS_TOPIC = process.env.DISCORD_COMMANDS_TOPIC;
@@ -17,9 +17,7 @@ const DISCORD_PUBLIC_KEY = process.env.DISCORD_PUBLIC_KEY;
 
 const pubsub = new PubSub({ projectId: PROJECT_ID });
 
-/**
- * Verify Discord signature
- */
+
 function verifyDiscordSignature(signature, timestamp, body) {
   if (!DISCORD_PUBLIC_KEY) {
     console.error('DISCORD_PUBLIC_KEY not configured');
@@ -27,17 +25,11 @@ function verifyDiscordSignature(signature, timestamp, body) {
   }
 
   try {
-    const message = timestamp + body;
-    const isValid = crypto.verify(
-      'sha512',
-      Buffer.from(message),
-      {
-        key: Buffer.from(DISCORD_PUBLIC_KEY, 'hex'),
-        padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
-      },
-      Buffer.from(signature, 'hex')
-    );
-    return isValid;
+    const message = Buffer.from(timestamp + body);
+    const signatureBuffer = Buffer.from(signature, 'hex');
+    const publicKeyBuffer = Buffer.from(DISCORD_PUBLIC_KEY, 'hex');
+
+    return nacl.sign.detached.verify(message, signatureBuffer, publicKeyBuffer);
   } catch (error) {
     console.error('Signature verification error:', error);
     return false;
@@ -48,31 +40,43 @@ function verifyDiscordSignature(signature, timestamp, body) {
  * HTTP function handler
  */
 functions.http('handler', async (req, res) => {
-  console.log('Discord webhook received');
+  console.log('Discord webhook received', { method: req.method, hasBody: !!req.body });
 
-  // Only accept POST requests
-  if (req.method !== 'POST') {
-    return res.status(405).send('Method Not Allowed');
-  }
+  try {
+    // Only accept POST requests
+    if (req.method !== 'POST') {
+      return res.status(405).send('Method Not Allowed');
+    }
 
-  // Verify signature
-  const signature = req.headers['x-signature-ed25519'];
-  const timestamp = req.headers['x-signature-timestamp'];
-  const rawBody = JSON.stringify(req.body);
+    // Get raw body for signature verification
+    const rawBody = req.rawBody ? req.rawBody.toString() : JSON.stringify(req.body);
+    console.log('Request body type:', req.body?.type);
 
-  if (!signature || !timestamp) {
-    console.error('Missing signature headers');
-    return res.status(401).send('Unauthorized');
-  }
+    // Verify signature
+    const signature = req.headers['x-signature-ed25519'];
+    const timestamp = req.headers['x-signature-timestamp'];
 
-  // Note: Signature verification with Ed25519 requires nacl library
-  // For now, we'll skip signature verification in placeholder
-  // TODO: Implement proper Ed25519 signature verification
+    if (!signature || !timestamp) {
+      console.error('Missing signature headers');
+      return res.status(401).send('Unauthorized');
+    }
 
-  // Handle Discord ping
-  if (req.body.type === 1) {
-    console.log('Discord ping received');
-    return res.status(200).json({ type: 1 });
+    // Verify Ed25519 signature
+    if (!verifyDiscordSignature(signature, timestamp, rawBody)) {
+      console.error('Invalid signature');
+      return res.status(401).send('Invalid signature');
+    }
+
+    console.log('Signature verified successfully');
+
+    // Handle Discord ping
+    if (req.body.type === 1) {
+      console.log('Discord ping received, responding with type 1');
+      return res.status(200).json({ type: 1 });
+    }
+  } catch (error) {
+    console.error('Error processing request:', error);
+    return res.status(500).send('Internal Server Error');
   }
 
   // Acknowledge immediately

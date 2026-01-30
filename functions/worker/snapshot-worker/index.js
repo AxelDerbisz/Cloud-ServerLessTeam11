@@ -1,12 +1,3 @@
-/**
- * Snapshot Worker Function
- *
- * Pub/Sub-triggered function that:
- * 1. Generates a PNG image of the current canvas state
- * 2. Uploads it to Cloud Storage
- * 3. Posts it to Discord channel
- */
-
 const functions = require('@google-cloud/functions-framework');
 const { Firestore } = require('@google-cloud/firestore');
 const { Storage } = require('@google-cloud/storage');
@@ -16,7 +7,7 @@ const PROJECT_ID = process.env.PROJECT_ID;
 const SNAPSHOTS_BUCKET = process.env.SNAPSHOTS_BUCKET;
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 
-const firestore = new Firestore({ projectId: PROJECT_ID });
+const firestore = new Firestore({ projectId: PROJECT_ID, databaseId: 'team11-database' });
 const storage = new Storage({ projectId: PROJECT_ID });
 
 const DISCORD_API_ENDPOINT = 'https://discord.com/api/v10';
@@ -25,9 +16,6 @@ const DISCORD_API_ENDPOINT = 'https://discord.com/api/v10';
 const DEFAULT_CANVAS_SIZE = 1000;
 const PIXEL_SIZE = 10; // Each pixel is 10x10 in the image
 
-/**
- * Get all pixels from Firestore
- */
 async function getAllPixels() {
   const snapshot = await firestore.collection('pixels').get();
 
@@ -45,9 +33,6 @@ async function getAllPixels() {
   return pixels;
 }
 
-/**
- * Generate canvas image
- */
 function generateCanvasImage(pixels, width, height) {
   const canvasWidth = width * PIXEL_SIZE;
   const canvasHeight = height * PIXEL_SIZE;
@@ -62,7 +47,7 @@ function generateCanvasImage(pixels, width, height) {
   // Draw pixels
   pixels.forEach(pixel => {
     if (pixel.x >= 0 && pixel.x < width && pixel.y >= 0 && pixel.y < height) {
-      ctx.fillStyle = pixel.color;
+      ctx.fillStyle = pixel.color.startsWith('#') ? pixel.color : `#${pixel.color}`;
       ctx.fillRect(
         pixel.x * PIXEL_SIZE,
         pixel.y * PIXEL_SIZE,
@@ -75,9 +60,6 @@ function generateCanvasImage(pixels, width, height) {
   return canvas.toBuffer('image/png');
 }
 
-/**
- * Upload image to Cloud Storage
- */
 async function uploadImage(imageBuffer, filename) {
   const bucket = storage.bucket(SNAPSHOTS_BUCKET);
   const file = bucket.file(filename);
@@ -86,16 +68,12 @@ async function uploadImage(imageBuffer, filename) {
     metadata: {
       contentType: 'image/png',
       cacheControl: 'public, max-age=3600'
-    },
-    public: true
+    }
   });
 
   return `https://storage.googleapis.com/${SNAPSHOTS_BUCKET}/${filename}`;
 }
 
-/**
- * Post snapshot to Discord
- */
 async function postToDiscord(channelId, imageUrl, pixelCount) {
   try {
     const response = await fetch(
@@ -131,9 +109,6 @@ async function postToDiscord(channelId, imageUrl, pixelCount) {
   }
 }
 
-/**
- * CloudEvent function handler (Pub/Sub)
- */
 functions.cloudEvent('handler', async (cloudEvent) => {
   console.log('Snapshot request received');
 

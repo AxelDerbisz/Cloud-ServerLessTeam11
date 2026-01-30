@@ -1,6 +1,8 @@
 terraform {
   required_version = ">= 1.0"
 
+  backend "gcs" {}
+
   required_providers {
     google = {
       source  = "hashicorp/google"
@@ -89,20 +91,32 @@ module "firestore" {
 }
 
 # Placeholder source code for functions
+locals {
+  function_source_paths = {
+    "discord-proxy"   = "../../../functions/proxy/discord-proxy"
+    "web-proxy"       = "../../../functions/proxy/web-proxy"
+    "auth-handler"    = "../../../functions/proxy/auth-handler"
+    "pixel-worker"    = "../../../functions/worker/pixel-worker"
+    "discord-worker"  = "../../../functions/worker/discord-worker"
+    "snapshot-worker" = "../../../functions/worker/snapshot-worker"
+    "session-worker"  = "../../../functions/worker/session-worker"
+  }
+}
+
+data "archive_file" "function_source" {
+  for_each = local.function_source_paths
+
+  type        = "zip"
+  source_dir  = each.value
+  output_path = "${path.module}/.terraform/tmp/${each.key}.zip"
+}
+
 resource "google_storage_bucket_object" "function_source_placeholder" {
-  for_each = toset([
-    "discord-proxy",
-    "web-proxy",
-    "auth-handler",
-    "pixel-worker",
-    "discord-worker",
-    "snapshot-worker",
-    "session-worker",
-  ])
+  for_each = local.function_source_paths
 
   name   = "${each.key}/source.zip"
   bucket = module.storage.functions_source_bucket
-  source = var.placeholder_source_path
+  source = data.archive_file.function_source[each.key].output_path
 
   depends_on = [module.storage]
 }
