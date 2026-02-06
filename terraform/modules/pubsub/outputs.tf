@@ -3,11 +3,6 @@ output "pixel_events_topic" {
   value       = google_pubsub_topic.pixel_events.name
 }
 
-output "discord_commands_topic" {
-  description = "Discord commands topic name"
-  value       = google_pubsub_topic.discord_commands.name
-}
-
 output "session_events_topic" {
   description = "Session events topic name"
   value       = google_pubsub_topic.session_events.name

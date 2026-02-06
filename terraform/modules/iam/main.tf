@@ -4,14 +4,14 @@
 resource "google_service_account" "proxy_functions" {
   account_id   = "proxy-functions-sa"
   display_name = "Proxy Functions Service Account"
-  description  = "Service account for HTTP proxy functions (discord-proxy, web-proxy, auth-handler)"
+  description  = "Service account for HTTP proxy functions (discord-proxy, auth-handler)"
 }
 
 # Service account for worker functions (Pub/Sub-triggered)
 resource "google_service_account" "worker_functions" {
   account_id   = "worker-functions-sa"
   display_name = "Worker Functions Service Account"
-  description  = "Service account for worker functions (pixel-worker, discord-worker, snapshot-worker, session-worker)"
+  description  = "Service account for worker functions (pixel-worker, snapshot-worker, session-worker)"
 }
 
 # Proxy functions permissions

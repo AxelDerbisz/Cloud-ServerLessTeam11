@@ -10,11 +10,6 @@ resource "google_pubsub_topic" "pixel_events" {
   name = "pixel-events"
 }
 
-# Discord commands topic
-resource "google_pubsub_topic" "discord_commands" {
-  name = "discord-commands"
-}
-
 # Session events topic
 resource "google_pubsub_topic" "session_events" {
   name = "session-events"
@@ -34,26 +29,6 @@ resource "google_pubsub_topic" "public_pixel" {
 resource "google_pubsub_subscription" "pixel_worker" {
   name  = "pixel-worker-sub"
   topic = google_pubsub_topic.pixel_events.name
-
-  ack_deadline_seconds = 60
-
-  retry_policy {
-    minimum_backoff = "10s"
-    maximum_backoff = "600s"
-  }
-
-  dead_letter_policy {
-    dead_letter_topic     = google_pubsub_topic.dead_letter.id
-    max_delivery_attempts = 5
-  }
-
-  depends_on = [google_pubsub_topic_iam_member.dead_letter_publisher]
-}
-
-# Discord worker subscription
-resource "google_pubsub_subscription" "discord_worker" {
-  name  = "discord-worker-sub"
-  topic = google_pubsub_topic.discord_commands.name
 
   ack_deadline_seconds = 60
 

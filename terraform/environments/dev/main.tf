@@ -94,10 +94,8 @@ module "firestore" {
 locals {
   function_source_paths = {
     "discord-proxy"   = "../../../functions/proxy/discord-proxy"
-    "web-proxy"       = "../../../functions/proxy/web-proxy"
     "auth-handler"    = "../../../functions/proxy/auth-handler"
     "pixel-worker"    = "../../../functions/worker/pixel-worker"
-    "discord-worker"  = "../../../functions/worker/discord-worker"
     "snapshot-worker" = "../../../functions/worker/snapshot-worker"
     "session-worker"  = "../../../functions/worker/session-worker"
   }
@@ -128,6 +126,7 @@ module "discord_proxy" {
   project_id            = var.project_id
   region                = var.region
   function_name         = "discord-proxy"
+  runtime               = "go122"
   entry_point           = "handler"
   source_bucket         = module.storage.functions_source_bucket
   source_object         = google_storage_bucket_object.function_source_placeholder["discord-proxy"].name
@@ -160,42 +159,6 @@ module "discord_proxy" {
   labels = {
     function_type = "proxy"
     service       = "discord"
-  }
-
-  depends_on = [module.iam, module.storage, module.pubsub]
-}
-
-# Web proxy function
-module "web_proxy" {
-  source = "../../modules/cloud-function"
-
-  project_id            = var.project_id
-  region                = var.region
-  function_name         = "web-proxy"
-  entry_point           = "handler"
-  source_bucket         = module.storage.functions_source_bucket
-  source_object         = google_storage_bucket_object.function_source_placeholder["web-proxy"].name
-  service_account_email = module.iam.proxy_functions_sa_email
-  allow_unauthenticated = true
-  memory                = "256M"
-  timeout               = 60
-
-  environment_variables = {
-    PROJECT_ID        = var.project_id
-    PIXEL_EVENTS_TOPIC = module.pubsub.pixel_events_topic
-  }
-
-  secret_environment_variables = [
-    {
-      key     = "JWT_SECRET"
-      secret  = "jwt-secret"
-      version = "latest"
-    }
-  ]
-
-  labels = {
-    function_type = "proxy"
-    service       = "web"
   }
 
   depends_on = [module.iam, module.storage, module.pubsub]
@@ -280,44 +243,6 @@ module "pixel_worker" {
   depends_on = [module.iam, module.storage, module.pubsub]
 }
 
-# Discord worker function
-module "discord_worker" {
-  source = "../../modules/cloud-function"
-
-  project_id            = var.project_id
-  region                = var.region
-  function_name         = "discord-worker"
-  entry_point           = "handler"
-  source_bucket         = module.storage.functions_source_bucket
-  source_object         = google_storage_bucket_object.function_source_placeholder["discord-worker"].name
-  service_account_email = module.iam.worker_functions_sa_email
-  trigger_topic         = "projects/${var.project_id}/topics/${module.pubsub.discord_commands_topic}"
-  retry_on_failure      = true
-  memory                = "512M"
-  timeout               = 120
-
-  environment_variables = {
-    PROJECT_ID           = var.project_id
-    SNAPSHOT_EVENTS_TOPIC = module.pubsub.snapshot_events_topic
-    SESSION_EVENTS_TOPIC  = module.pubsub.session_events_topic
-  }
-
-  secret_environment_variables = [
-    {
-      key     = "DISCORD_BOT_TOKEN"
-      secret  = "discord-bot-token"
-      version = "latest"
-    }
-  ]
-
-  labels = {
-    function_type = "worker"
-    service       = "discord"
-  }
-
-  depends_on = [module.iam, module.storage, module.pubsub]
-}
-
 # Snapshot worker function
 module "snapshot_worker" {
   source = "../../modules/cloud-function"
@@ -395,7 +320,6 @@ module "session_worker" {
 locals {
   openapi_spec = templatefile("${path.module}/api-spec.yaml", {
     discord_proxy_url = module.discord_proxy.function_uri
-    web_proxy_url     = module.web_proxy.function_uri
     auth_handler_url  = module.auth_handler.function_uri
   })
 }
@@ -418,7 +342,6 @@ module "api_gateway" {
 
   depends_on = [
     module.discord_proxy,
-    module.web_proxy,
     module.auth_handler,
     google_project_service.required_apis
   ]

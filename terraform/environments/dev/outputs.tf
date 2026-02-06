@@ -31,11 +31,11 @@ output "firestore_database" {
 output "pubsub_topics" {
   description = "Pub/Sub topics"
   value = {
-    pixel_events      = module.pubsub.pixel_events_topic
-    discord_commands  = module.pubsub.discord_commands_topic
-    session_events    = module.pubsub.session_events_topic
-    snapshot_events   = module.pubsub.snapshot_events_topic
-    dead_letter       = module.pubsub.dead_letter_topic
+    pixel_events    = module.pubsub.pixel_events_topic
+    session_events  = module.pubsub.session_events_topic
+    snapshot_events = module.pubsub.snapshot_events_topic
+    public_pixel    = module.pubsub.public_pixel_topic
+    dead_letter     = module.pubsub.dead_letter_topic
   }
 }
 
