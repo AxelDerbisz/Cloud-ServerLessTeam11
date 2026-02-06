@@ -57,17 +57,20 @@ async function startSession(metadata) {
   try {
     const sessionRef = firestore.collection('sessions').doc('current');
 
+    const canvasWidth = metadata.canvasWidth || 100;
+    const canvasHeight = metadata.canvasHeight || 100;
+
     await sessionRef.set({
       status: 'active',
       startedAt: new Date().toISOString(),
-      canvasWidth: metadata.canvasWidth || 100,
-      canvasHeight: metadata.canvasHeight || 100,
+      canvasWidth: canvasWidth,
+      canvasHeight: canvasHeight,
       createdBy: metadata.userId,
       createdByUsername: metadata.username
     });
 
-    console.log('Session started');
-    return { success: true, message: '✅ Session started successfully' };
+    console.log(`Session started with dimensions: ${canvasWidth}x${canvasHeight}`);
+    return { success: true, message: `✅ Session started successfully (${canvasWidth}x${canvasHeight})` };
   } catch (error) {
     console.error('Failed to start session:', error);
     return { success: false, message: `❌ Failed to start session: ${error.message}` };
@@ -201,7 +204,7 @@ functions.cloudEvent('handler', async (cloudEvent) => {
     const data = cloudEvent.data.message.data;
     const messageData = JSON.parse(Buffer.from(data, 'base64').toString());
 
-    const { action, userId, username, interactionToken, applicationId } = messageData;
+    const { action, userId, username, interactionToken, applicationId, canvasWidth, canvasHeight } = messageData;
 
     console.log(`Processing session action: ${action} by ${username}`);
 
@@ -209,7 +212,7 @@ functions.cloudEvent('handler', async (cloudEvent) => {
 
     switch (action) {
       case 'start':
-        result = await startSession({ userId, username });
+        result = await startSession({ userId, username, canvasWidth, canvasHeight });
         break;
 
       case 'pause':

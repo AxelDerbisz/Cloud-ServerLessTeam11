@@ -162,6 +162,8 @@ func publishMessage(ctx context.Context, topicName string, data interface{}, att
 		return err
 	}
 
+	log.Printf("Publishing to %s: %s", topicName, string(payload))
+
 	topic := pubsubClient.Topic(topicName)
 	result := topic.Publish(ctx, &pubsub.Message{
 		Data:       payload,
@@ -269,6 +271,27 @@ func routeSessionCommand(ctx context.Context, interaction Interaction) error {
 		"interactionToken": interaction.Token,
 		"applicationId":    interaction.ApplicationID,
 		"timestamp":        time.Now().UTC().Format(time.RFC3339),
+	}
+
+	// Extract optional width and height parameters (for "start" action)
+	if action == "start" && len(interaction.Data.Options) > 1 {
+		log.Printf("Session start - found %d options", len(interaction.Data.Options))
+		for _, option := range interaction.Data.Options[1:] {
+			log.Printf("Option: %s = %v", option.Name, option.Value)
+			if option.Name == "width" {
+				if width, err := toInt(option.Value); err == nil && width >= 10 && width <= 100000 {
+					messageData["canvasWidth"] = width
+					log.Printf("Set canvasWidth to %d", width)
+				}
+			} else if option.Name == "height" {
+				if height, err := toInt(option.Value); err == nil && height >= 10 && height <= 100000 {
+					messageData["canvasHeight"] = height
+					log.Printf("Set canvasHeight to %d", height)
+				}
+			}
+		}
+	} else {
+		log.Printf("Session action=%s, options=%d", action, len(interaction.Data.Options))
 	}
 
 	return publishMessage(ctx, sessionEventsTopic, messageData, map[string]string{

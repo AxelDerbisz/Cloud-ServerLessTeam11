@@ -38,7 +38,7 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding $false
 
 $drawJson = '{"name":"draw","description":"Draw a pixel on the canvas","options":[{"name":"x","description":"X coordinate","type":4,"required":true},{"name":"y","description":"Y coordinate","type":4,"required":true},{"name":"color","description":"Hex color e.g. FF0000","type":3,"required":true}]}'
 $canvasJson = '{"name":"canvas","description":"Get current canvas state and info"}'
-$sessionJson = '{"name":"session","description":"Manage canvas session (Admin only)","options":[{"name":"action","description":"Session action","type":3,"required":true,"choices":[{"name":"start","value":"start"},{"name":"pause","value":"pause"},{"name":"reset","value":"reset"}]}]}'
+$sessionJson = '{"name":"session","description":"Manage canvas session (Admin only)","options":[{"name":"action","description":"Session action","type":3,"required":true,"choices":[{"name":"start","value":"start"},{"name":"pause","value":"pause"},{"name":"reset","value":"reset"}]},{"name":"width","description":"Canvas width in pixels (default: 100)","type":4,"required":false,"min_value":10,"max_value":100000},{"name":"height","description":"Canvas height in pixels (default: 100)","type":4,"required":false,"min_value":10,"max_value":100000}]}'
 $snapshotJson = '{"name":"snapshot","description":"Generate canvas snapshot image (Admin only)"}'
 
 $commands = @(

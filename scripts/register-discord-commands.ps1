@@ -63,6 +63,22 @@ $commands = @(
                     @{ name = "pause"; value = "pause" },
                     @{ name = "reset"; value = "reset" }
                 )
+            },
+            @{
+                name = "width"
+                description = "Canvas width in pixels (default: 100)"
+                type = 4  # INTEGER
+                required = $false
+                min_value = 10
+                max_value = 100000
+            },
+            @{
+                name = "height"
+                description = "Canvas height in pixels (default: 100)"
+                type = 4  # INTEGER
+                required = $false
+                min_value = 10
+                max_value = 100000
             }
         )
     },
