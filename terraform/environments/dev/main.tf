@@ -123,17 +123,18 @@ resource "google_storage_bucket_object" "function_source_placeholder" {
 module "discord_proxy" {
   source = "../../modules/cloud-function"
 
-  project_id            = var.project_id
-  region                = var.region
-  function_name         = "discord-proxy"
-  runtime               = "go122"
-  entry_point           = "handler"
-  source_bucket         = module.storage.functions_source_bucket
-  source_object         = google_storage_bucket_object.function_source_placeholder["discord-proxy"].name
-  service_account_email = module.iam.proxy_functions_sa_email
-  allow_unauthenticated = true
-  memory                = "256M"
-  timeout               = 60
+  project_id              = var.project_id
+  region                  = var.region
+  function_name           = "discord-proxy"
+  runtime                 = "go122"
+  entry_point             = "handler"
+  source_bucket           = module.storage.functions_source_bucket
+  source_object           = google_storage_bucket_object.function_source_placeholder["discord-proxy"].name
+  service_account_email   = module.iam.proxy_functions_sa_email
+  allow_unauthenticated   = false
+  gateway_service_account = module.iam.proxy_functions_sa_email
+  memory                  = "256M"
+  timeout                 = 60
 
   environment_variables = {
     PROJECT_ID             = var.project_id
@@ -168,16 +169,17 @@ module "discord_proxy" {
 module "auth_handler" {
   source = "../../modules/cloud-function"
 
-  project_id            = var.project_id
-  region                = var.region
-  function_name         = "auth-handler"
-  entry_point           = "handler"
-  source_bucket         = module.storage.functions_source_bucket
-  source_object         = google_storage_bucket_object.function_source_placeholder["auth-handler"].name
-  service_account_email = module.iam.proxy_functions_sa_email
-  allow_unauthenticated = true
-  memory                = "256M"
-  timeout               = 60
+  project_id              = var.project_id
+  region                  = var.region
+  function_name           = "auth-handler"
+  entry_point             = "handler"
+  source_bucket           = module.storage.functions_source_bucket
+  source_object           = google_storage_bucket_object.function_source_placeholder["auth-handler"].name
+  service_account_email   = module.iam.proxy_functions_sa_email
+  allow_unauthenticated   = false
+  gateway_service_account = module.iam.proxy_functions_sa_email
+  memory                  = "256M"
+  timeout                 = 60
 
   environment_variables = {
     PROJECT_ID        = var.project_id

@@ -63,3 +63,14 @@ resource "google_cloud_run_service_iam_member" "invoker" {
   role     = "roles/run.invoker"
   member   = "allUsers"
 }
+
+# Allow API Gateway service account to invoke HTTP functions
+resource "google_cloud_run_service_iam_member" "gateway_invoker" {
+  count = var.gateway_service_account != null && var.trigger_topic == null ? 1 : 0
+
+  project  = google_cloudfunctions2_function.function.project
+  location = google_cloudfunctions2_function.function.location
+  service  = google_cloudfunctions2_function.function.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${var.gateway_service_account}"
+}

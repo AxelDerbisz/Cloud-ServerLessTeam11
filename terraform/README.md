@@ -119,11 +119,9 @@ The infrastructure creates:
 
 - **API Gateway**: Single entry point for all HTTP traffic
 - **Cloud Functions**:
-  - `discord-proxy` - HTTP-triggered, validates Discord webhooks
-  - `web-proxy` - HTTP-triggered, validates JWT tokens
+  - `discord-proxy` - HTTP-triggered (Go), validates Discord webhooks and routes commands
   - `auth-handler` - HTTP-triggered, handles Discord OAuth2
   - `pixel-worker` - Pub/Sub-triggered, processes pixel placement
-  - `discord-worker` - Pub/Sub-triggered, handles Discord commands
   - `snapshot-worker` - Pub/Sub-triggered, generates canvas snapshots
   - `session-worker` - Pub/Sub-triggered, manages sessions
 - **Pub/Sub Topics**: Event-driven messaging between functions

@@ -97,6 +97,12 @@ variable "allow_unauthenticated" {
   default     = false
 }
 
+variable "gateway_service_account" {
+  description = "Service account email used by API Gateway to invoke this function (optional, for HTTP functions)"
+  type        = string
+  default     = null
+}
+
 variable "labels" {
   description = "Labels for the function"
   type        = map(string)
