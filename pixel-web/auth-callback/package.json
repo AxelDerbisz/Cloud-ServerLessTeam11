@@ -1,0 +1,17 @@
+{
+  "name": "auth-callback",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google-cloud/firestore": "^8.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "node-fetch": "^2.7.0"
+  }
+}
