@@ -1,0 +1,210 @@
+/**
+ * Auth Handler Function
+ *
+ * HTTP-triggered function that handles Discord OAuth2 flow:
+ * 1. GET /auth/login - Redirects to Discord OAuth2
+ * 2. GET /auth/callback - Handles OAuth2 callback, issues JWT
+ * 3. GET /auth/me - Returns current user info from JWT
+ */
+
+const functions = require('@google-cloud/functions-framework');
+const { Firestore } = require('@google-cloud/firestore');
+const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+
+const PROJECT_ID = process.env.PROJECT_ID;
+const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
+const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET;
+
+const firestore = new Firestore({ projectId: PROJECT_ID });
+
+const DISCORD_API_ENDPOINT = 'https://discord.com/api/v10';
+
+/**
+ * Get the redirect URI dynamically from the request
+ */
+function getRedirectUri(req) {
+  // Construct redirect URI from the request host (works through API Gateway)
+  const protocol = req.headers['x-forwarded-proto'] || 'https';
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  return `${protocol}://${host}/auth/callback`;
+}
+
+/**
+ * Handle GET /auth/login - Initiate OAuth2 flow
+ */
+function handleLogin(req, res) {
+  const state = crypto.randomBytes(16).toString('hex');
+  const redirectUri = getRedirectUri(req);
+
+  const params = new URLSearchParams({
+    client_id: DISCORD_CLIENT_ID,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: 'identify',
+    state: state
+  });
+
+  const authUrl = `https://discord.com/api/oauth2/authorize?${params.toString()}`;
+
+  // In production, you'd want to store state in session/cookie to validate
+  res.redirect(authUrl);
+}
+
+/**
+ * Handle GET /auth/callback - OAuth2 callback
+ */
+async function handleCallback(req, res) {
+  const { code, state } = req.query;
+
+  if (!code) {
+    return res.status(400).json({ error: 'Missing authorization code' });
+  }
+
+  try {
+    const redirectUri = getRedirectUri(req);
+
+    // Exchange code for access token
+    const tokenResponse = await fetch(`${DISCORD_API_ENDPOINT}/oauth2/token`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: new URLSearchParams({
+        client_id: DISCORD_CLIENT_ID,
+        client_secret: DISCORD_CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code: code,
+        redirect_uri: redirectUri
+      })
+    });
+
+    if (!tokenResponse.ok) {
+      throw new Error('Failed to exchange code for token');
+    }
+
+    const tokenData = await tokenResponse.json();
+    const accessToken = tokenData.access_token;
+
+    // Get user info from Discord
+    const userResponse = await fetch(`${DISCORD_API_ENDPOINT}/users/@me`, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`
+      }
+    });
+
+    if (!userResponse.ok) {
+      throw new Error('Failed to get user info');
+    }
+
+    const userData = await userResponse.json();
+
+    // Store/update user in Firestore
+    await firestore.collection('users').doc(userData.id).set({
+      username: userData.username,
+      discriminator: userData.discriminator,
+      avatar: userData.avatar,
+      lastLogin: new Date().toISOString(),
+      pixelCount: firestore.FieldValue.increment(0) // Initialize if new
+    }, { merge: true });
+
+    // Create JWT
+    const jwtToken = jwt.sign(
+      {
+        sub: userData.id,
+        username: userData.username,
+        discriminator: userData.discriminator,
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60) // 7 days
+      },
+      JWT_SECRET
+    );
+
+    // Return JWT to client
+    // In production, you'd redirect to frontend with token
+    res.status(200).json({
+      token: jwtToken,
+      user: {
+        id: userData.id,
+        username: userData.username,
+        discriminator: userData.discriminator,
+        avatar: userData.avatar
+      }
+    });
+  } catch (error) {
+    console.error('OAuth2 callback error:', error);
+    res.status(500).json({ error: 'Authentication failed' });
+  }
+}
+
+/**
+ * Handle GET /auth/me - Get current user
+ */
+async function handleMe(req, res) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Missing authorization header' });
+  }
+
+  const token = authHeader.substring(7);
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    // Optionally fetch updated user data from Firestore
+    const userDoc = await firestore.collection('users').doc(decoded.sub).get();
+
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const userData = userDoc.data();
+
+    res.status(200).json({
+      id: decoded.sub,
+      username: decoded.username,
+      discriminator: decoded.discriminator,
+      pixelCount: userData.pixelCount || 0,
+      lastPixelAt: userData.lastPixelAt || null
+    });
+  } catch (error) {
+    console.error('Token verification error:', error);
+    res.status(401).json({ error: 'Invalid token' });
+  }
+}
+
+/**
+ * HTTP function handler
+ */
+functions.http('handler', async (req, res) => {
+  // Enable CORS
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(204).send('');
+  }
+
+  if (req.method !== 'GET') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const path = req.path || '/';
+
+  if (path.startsWith('/auth/login') || path.includes('login')) {
+    return handleLogin(req, res);
+  }
+
+  if (path.startsWith('/auth/callback') || path.includes('callback')) {
+    return await handleCallback(req, res);
+  }
+
+  if (path.startsWith('/auth/me') || path.includes('/me')) {
+    return await handleMe(req, res);
+  }
+
+  res.status(404).json({ error: 'Not found' });
+});
