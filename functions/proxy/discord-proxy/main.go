@@ -13,9 +13,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"cloud.google.com/go/firestore"
 	"cloud.google.com/go/pubsub"
 	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
 )
@@ -29,7 +29,7 @@ var (
 	sessionEventsTopic  string
 	adminRoleIDs        []string
 	pubsubClient        *pubsub.Client
-	firestoreClient     *firestore.Client
+	pubsubOnce          sync.Once
 )
 
 const discordAPIEndpoint = "https://discord.com/api/v10"
@@ -54,20 +54,18 @@ func init() {
 		}
 	}
 
-	ctx := context.Background()
-	var err error
-
-	pubsubClient, err = pubsub.NewClient(ctx, projectID)
-	if err != nil {
-		log.Printf("Failed to create Pub/Sub client: %v", err)
-	}
-
-	firestoreClient, err = firestore.NewClientWithDatabase(ctx, projectID, "team11-database")
-	if err != nil {
-		log.Printf("Failed to create Firestore client: %v", err)
-	}
-
 	functions.HTTP("handler", Handler)
+}
+
+func getPubsubClient() *pubsub.Client {
+	pubsubOnce.Do(func() {
+		var err error
+		pubsubClient, err = pubsub.NewClient(context.Background(), projectID)
+		if err != nil {
+			log.Printf("Failed to create Pub/Sub client: %v", err)
+		}
+	})
+	return pubsubClient
 }
 
 func envOrDefault(key, defaultVal string) string {
@@ -164,7 +162,7 @@ func publishMessage(ctx context.Context, topicName string, data interface{}, att
 
 	log.Printf("Publishing to %s: %s", topicName, string(payload))
 
-	topic := pubsubClient.Topic(topicName)
+	topic := getPubsubClient().Topic(topicName)
 	result := topic.Publish(ctx, &pubsub.Message{
 		Data:       payload,
 		Attributes: attrs,
@@ -174,38 +172,19 @@ func publishMessage(ctx context.Context, topicName string, data interface{}, att
 	return err
 }
 
-// buildCanvasResponse queries Firestore and returns the canvas status message
-func buildCanvasResponse(ctx context.Context) string {
-	sessionDoc, err := firestoreClient.Collection("sessions").Doc("current").Get(ctx)
-	if err != nil {
-		return "No active session found."
+func routeCanvasCommand(ctx context.Context, interaction Interaction) error {
+	messageData := map[string]interface{}{
+		"action":           "status",
+		"userId":           interaction.Member.User.ID,
+		"username":         interaction.Member.User.Username,
+		"interactionToken": interaction.Token,
+		"applicationId":    interaction.ApplicationID,
+		"timestamp":        time.Now().UTC().Format(time.RFC3339),
 	}
 
-	data := sessionDoc.Data()
-	status, _ := data["status"].(string)
-	startedAt, _ := data["startedAt"].(string)
-	if startedAt == "" {
-		startedAt = "N/A"
-	}
-
-	canvasWidth := "∞"
-	if w, ok := data["canvasWidth"]; ok && w != nil {
-		canvasWidth = fmt.Sprintf("%v", w)
-	}
-	canvasHeight := "∞"
-	if h, ok := data["canvasHeight"]; ok && h != nil {
-		canvasHeight = fmt.Sprintf("%v", h)
-	}
-
-	// Count pixels using lightweight Select query (no field data transferred)
-	pixelDocs, err := firestoreClient.Collection("pixels").Select().Documents(ctx).GetAll()
-	pixelCount := 0
-	if err == nil {
-		pixelCount = len(pixelDocs)
-	}
-
-	return fmt.Sprintf("**Canvas Status**\nStatus: %s\nStarted: %s\nSize: %s x %s\nTotal Pixels: %d",
-		status, startedAt, canvasWidth, canvasHeight, pixelCount)
+	return publishMessage(ctx, sessionEventsTopic, messageData, map[string]string{
+		"type": "session_command",
+	})
 }
 
 func routeDrawCommand(ctx context.Context, interaction Interaction) error {
@@ -380,21 +359,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	ctx := context.Background()
 
-	// /canvas: query Firestore then respond with type 4 (immediate response)
-	// This avoids the Cloud Run response buffering issue with type 5 + follow-up
-	if commandName == "canvas" {
-		message := buildCanvasResponse(ctx)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"type": 4,
-			"data": map[string]string{
-				"content": message,
-			},
-		})
-		return
-	}
-
-	// For async commands: ACK with type 5, then publish to Pub/Sub
+	// All commands: ACK with type 5, then publish to Pub/Sub
 	// Workers will send the follow-up message to Discord
 	sendACK(w)
 
@@ -402,6 +367,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	case "draw":
 		if err := routeDrawCommand(ctx, interaction); err != nil {
 			log.Printf("Failed to route draw command: %v", err)
+		}
+
+	case "canvas":
+		if err := routeCanvasCommand(ctx, interaction); err != nil {
+			log.Printf("Failed to route canvas command: %v", err)
 		}
 
 	case "snapshot":
