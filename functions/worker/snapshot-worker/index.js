@@ -12,15 +12,13 @@ const storage = new Storage({ projectId: PROJECT_ID });
 
 const DISCORD_API_ENDPOINT = 'https://discord.com/api/v10';
 
-// Canvas rendering settings
 const DEFAULT_CANVAS_SIZE = 1000;
-const BASE_PIXEL_SIZE = 10; // Base pixel size for small canvases
-const TILE_SIZE = 2048; // Tile size in canvas coordinates (pixels) - larger for fewer tiles
-const MAX_TILE_IMAGE_SIZE = 4096; // Max image dimension per tile (in pixels)
-const THUMBNAIL_MAX_SIZE = 800; // Max thumbnail dimension for Discord
-const PARALLEL_UPLOADS = 5; // Number of parallel tile uploads
+const BASE_PIXEL_SIZE = 10;
+const TILE_SIZE = 2048;
+const MAX_TILE_IMAGE_SIZE = 4096
+const THUMBNAIL_MAX_SIZE = 800;
+const PARALLEL_UPLOADS = 5; 
 
-// Calculate dynamic pixel size based on canvas size to avoid huge images
 function getPixelSize(canvasWidth, canvasHeight) {
   const maxCanvasDim = Math.max(canvasWidth, canvasHeight);
   const maxTileImageSize = TILE_SIZE * BASE_PIXEL_SIZE;
@@ -29,7 +27,6 @@ function getPixelSize(canvasWidth, canvasHeight) {
     return BASE_PIXEL_SIZE;
   }
 
-  // Scale down pixel size for large canvases
   return Math.max(1, Math.floor(MAX_TILE_IMAGE_SIZE / TILE_SIZE));
 }
 
@@ -51,7 +48,6 @@ async function getAllPixels() {
 }
 
 function generateTile(pixels, tileX, tileY, tileSize, canvasWidth, canvasHeight, pixelSize) {
-  // Calculate pixel boundaries for this tile
   const startX = tileX * tileSize;
   const startY = tileY * tileSize;
   const endX = Math.min(startX + tileSize, canvasWidth);
@@ -63,21 +59,15 @@ function generateTile(pixels, tileX, tileY, tileSize, canvasWidth, canvasHeight,
   const canvas = createCanvas(tileWidth, tileHeight);
   const ctx = canvas.getContext('2d');
 
-  // Fill background with light gray for grid effect
-  ctx.fillStyle = '#E8E8E8';
+  ctx.fillStyle = '#FFFFFF';
   ctx.fillRect(0, 0, tileWidth, tileHeight);
-
-  // Draw pixels with grid spacing (leave 1px gap for grid lines)
-  const gridWidth = Math.max(1, Math.floor(pixelSize * 0.1)); // 10% of pixel size for grid, min 1px
-  const pixelDrawSize = pixelSize - gridWidth;
 
   pixels.forEach(pixel => {
     if (pixel.x >= startX && pixel.x < endX && pixel.y >= startY && pixel.y < endY) {
       const localX = (pixel.x - startX) * pixelSize;
       const localY = (pixel.y - startY) * pixelSize;
       ctx.fillStyle = pixel.color.startsWith('#') ? pixel.color : `#${pixel.color}`;
-      // Draw pixel with slight inset to show grid
-      ctx.fillRect(localX, localY, pixelDrawSize, pixelDrawSize);
+      ctx.fillRect(localX, localY, pixelSize, pixelSize);
     }
   });
 
@@ -85,32 +75,25 @@ function generateTile(pixels, tileX, tileY, tileSize, canvasWidth, canvasHeight,
 }
 
 function generateThumbnail(pixels, canvasWidth, canvasHeight, maxSize) {
-  // Calculate thumbnail dimensions maintaining aspect ratio
   const scale = Math.min(maxSize / canvasWidth, maxSize / canvasHeight, 1);
   const thumbWidth = Math.floor(canvasWidth * scale);
   const thumbHeight = Math.floor(canvasHeight * scale);
-  const pixelScale = scale; // How many canvas pixels per thumbnail pixel
+  const pixelScale = scale;
 
   const canvas = createCanvas(thumbWidth, thumbHeight);
   const ctx = canvas.getContext('2d');
 
-  // Fill background with light gray for grid effect
-  ctx.fillStyle = '#E8E8E8';
+  ctx.fillStyle = '#FFFFFF';
   ctx.fillRect(0, 0, thumbWidth, thumbHeight);
 
-  // Draw downscaled pixels with grid effect
   pixels.forEach(pixel => {
     if (pixel.x >= 0 && pixel.x < canvasWidth && pixel.y >= 0 && pixel.y < canvasHeight) {
       const thumbX = Math.floor(pixel.x * pixelScale);
       const thumbY = Math.floor(pixel.y * pixelScale);
-      const size = Math.max(1, Math.floor(pixelScale)); // At least 1 pixel
-
-      // For thumbnails, only show grid if pixels are large enough
-      const gridSize = size > 2 ? 1 : 0;
-      const drawSize = Math.max(1, size - gridSize);
+      const size = Math.max(1, Math.floor(pixelScale));
 
       ctx.fillStyle = pixel.color.startsWith('#') ? pixel.color : `#${pixel.color}`;
-      ctx.fillRect(thumbX, thumbY, drawSize, drawSize);
+      ctx.fillRect(thumbX, thumbY, size, size);
     }
   });
 
@@ -128,7 +111,6 @@ async function uploadFile(buffer, filepath, contentType = 'image/png') {
     }
   });
 
-  // Bucket has uniform bucket-level access - files are publicly readable by default
   return `https://storage.googleapis.com/${SNAPSHOTS_BUCKET}/${filepath}`;
 }
 
@@ -142,7 +124,6 @@ async function generateChunkedSnapshot(pixels, canvasWidth, canvasHeight, timest
 
   const snapshotDir = `snapshots/${timestamp}`;
 
-  // Create array of all tile coordinates
   const tileCoords = [];
   for (let ty = 0; ty < tilesY; ty++) {
     for (let tx = 0; tx < tilesX; tx++) {
@@ -150,8 +131,7 @@ async function generateChunkedSnapshot(pixels, canvasWidth, canvasHeight, timest
     }
   }
 
-  // Generate all tiles first (CPU-bound, must be sequential)
-  console.log('Step 1: Generating tiles...');
+  console.log('Step 1: Generating tiles');
   const tilesToUpload = [];
   for (let i = 0; i < tileCoords.length; i++) {
     const { tx, ty } = tileCoords[i];
@@ -162,7 +142,6 @@ async function generateChunkedSnapshot(pixels, canvasWidth, canvasHeight, timest
     }
   }
 
-  // Upload tiles in parallel batches (I/O-bound, benefits from parallelism)
   console.log('Step 2: Uploading tiles in parallel...');
   const tileUrls = [];
   for (let i = 0; i < tilesToUpload.length; i += PARALLEL_UPLOADS) {
@@ -180,8 +159,7 @@ async function generateChunkedSnapshot(pixels, canvasWidth, canvasHeight, timest
     console.log(`Uploaded ${tileUrls.length}/${totalTiles} tiles`);
   }
 
-  // Generate thumbnail
-  const thumbnailBuffer = generateThumbnail(pixels, canvasWidth, canvasHeight, THUMBNAIL_MAX_SIZE);
+    const thumbnailBuffer = generateThumbnail(pixels, canvasWidth, canvasHeight, THUMBNAIL_MAX_SIZE);
   const thumbnailUrl = await uploadFile(thumbnailBuffer, `${snapshotDir}/thumbnail.png`);
 
   // Create manifest
@@ -221,8 +199,8 @@ async function postToDiscord(channelId, thumbnailUrl, manifestUrl, manifest) {
         },
         body: JSON.stringify({
           embeds: [{
-            title: '📸 Canvas Snapshot',
-            description: `**Canvas:** ${canvasWidth}x${canvasHeight} pixels\n**Pixels drawn:** ${pixelCount}\n**Tiles:** ${tilesX}x${tilesY}\n\n[View Full Resolution Tiles](${manifestUrl})`,
+            title: ' Canvas Snapshot',
+            description: `**Canvas:** ${canvasWidth}x${canvasHeight} pixels\n**Pixels drawn:** ${pixelCount}\n**Tiles:** ${tilesX}x${tilesY}\n\n[View Full Resolution Tiles](${thumbnailUrl})`,
             image: {
               url: thumbnailUrl
             },
@@ -326,7 +304,7 @@ functions.cloudEvent('handler', async (cloudEvent) => {
       await sendDiscordFollowUp(
         applicationId,
         interactionToken,
-        `✅ Snapshot generated: ${manifest.tilesX}x${manifest.tilesY} tiles (${pixels.length} pixels)\n📊 Manifest: ${manifestUrl}`
+        `Snapshot generated: ${manifest.tilesX}x${manifest.tilesY} tiles (${pixels.length} pixels)\n📊 Manifest: ${manifestUrl}`
       );
     }
 
@@ -341,7 +319,7 @@ functions.cloudEvent('handler', async (cloudEvent) => {
         await sendDiscordFollowUp(
           messageData.applicationId,
           messageData.interactionToken,
-          `❌ Failed to generate snapshot: ${error.message}`
+          `Failed to generate snapshot: ${error.message}`
         );
       }
     } catch (e) {
