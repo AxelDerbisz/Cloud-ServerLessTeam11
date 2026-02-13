@@ -195,6 +195,38 @@ async function endSession() {
 }
 
 /**
+ * Get canvas status
+ */
+async function getCanvasStatus() {
+  try {
+    const sessionRef = firestore.collection('sessions').doc('current');
+    const sessionDoc = await sessionRef.get();
+
+    if (!sessionDoc.exists) {
+      return { success: true, message: 'No active session found.' };
+    }
+
+    const session = sessionDoc.data();
+    const status = session.status || 'unknown';
+    const startedAt = session.startedAt || 'N/A';
+    const canvasWidth = session.canvasWidth || '∞';
+    const canvasHeight = session.canvasHeight || '∞';
+
+    // Count pixels
+    const pixelDocs = await firestore.collection('pixels').select().get();
+    const pixelCount = pixelDocs.size;
+
+    return {
+      success: true,
+      message: `**Canvas Status**\nStatus: ${status}\nStarted: ${startedAt}\nSize: ${canvasWidth} x ${canvasHeight}\nTotal Pixels: ${pixelCount}`
+    };
+  } catch (error) {
+    console.error('Failed to get canvas status:', error);
+    return { success: false, message: `❌ Failed to get canvas status: ${error.message}` };
+  }
+}
+
+/**
  * CloudEvent function handler (Pub/Sub)
  */
 functions.cloudEvent('handler', async (cloudEvent) => {
@@ -229,6 +261,10 @@ functions.cloudEvent('handler', async (cloudEvent) => {
 
       case 'end':
         result = await endSession();
+        break;
+
+      case 'status':
+        result = await getCanvasStatus();
         break;
 
       default:

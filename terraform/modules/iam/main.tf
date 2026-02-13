@@ -1,6 +1,3 @@
-# IAM module for service accounts and permissions
-
-# Service account for proxy functions (HTTP-triggered)
 resource "google_service_account" "proxy_functions" {
   account_id   = "proxy-functions-sa"
   display_name = "Proxy Functions Service Account"
@@ -74,7 +71,6 @@ resource "google_project_iam_member" "worker_pubsub_subscriber" {
   member  = "serviceAccount:${google_service_account.worker_functions.email}"
 }
 
-# Allow worker functions to log
 resource "google_project_iam_member" "worker_log_writer" {
   project = var.project_id
   role    = "roles/logging.logWriter"
