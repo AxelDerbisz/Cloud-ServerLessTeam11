@@ -82,3 +82,31 @@ resource "google_project_iam_member" "proxy_log_writer" {
   role    = "roles/logging.logWriter"
   member  = "serviceAccount:${google_service_account.proxy_functions.email}"
 }
+
+# Allow worker functions to write traces to Cloud Trace
+resource "google_project_iam_member" "worker_trace_agent" {
+  project = var.project_id
+  role    = "roles/cloudtrace.agent"
+  member  = "serviceAccount:${google_service_account.worker_functions.email}"
+}
+
+# Allow worker functions to write traces via OTLP/Telemetry API
+resource "google_project_iam_member" "worker_telemetry_writer" {
+  project = var.project_id
+  role    = "roles/telemetry.tracesWriter"
+  member  = "serviceAccount:${google_service_account.worker_functions.email}"
+}
+
+# Allow proxy functions to write traces to Cloud Trace
+resource "google_project_iam_member" "proxy_trace_agent" {
+  project = var.project_id
+  role    = "roles/cloudtrace.agent"
+  member  = "serviceAccount:${google_service_account.proxy_functions.email}"
+}
+
+# Allow proxy functions to write traces via OTLP/Telemetry API
+resource "google_project_iam_member" "proxy_telemetry_writer" {
+  project = var.project_id
+  role    = "roles/telemetry.tracesWriter"
+  member  = "serviceAccount:${google_service_account.proxy_functions.email}"
+}
