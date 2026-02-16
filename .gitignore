@@ -117,6 +117,8 @@ instance/
 # Sphinx documentation
 docs/_build/
 
+CLAUDE.md
+
 # PyBuilder
 .pybuilder/
 target/
