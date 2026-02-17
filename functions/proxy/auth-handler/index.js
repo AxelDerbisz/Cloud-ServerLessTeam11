@@ -33,7 +33,7 @@ const tracer = trace.getTracer('auth-handler');
 console.log(`OTLP tracing initialized for ${serviceName}`);
 
 const functions = require('@google-cloud/functions-framework');
-const { Firestore } = require('@google-cloud/firestore');
+const { Firestore, FieldValue } = require('@google-cloud/firestore');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 
@@ -42,23 +42,21 @@ const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
 const JWT_SECRET = process.env.JWT_SECRET;
 
-const firestore = new Firestore({ projectId: PROJECT_ID });
+const firestore = new Firestore({ projectId: PROJECT_ID, databaseId: 'team11-database' });
 
 const DISCORD_API_ENDPOINT = 'https://discord.com/api/v10';
 
-/**
- * Get the redirect URI dynamically from the request
- */
+
 function getRedirectUri(req) {
-  // Construct redirect URI from the request host (works through API Gateway)
+  if (process.env.REDIRECT_URI) {
+    return process.env.REDIRECT_URI;
+  }
+  // Fallback: construct from request headers
   const protocol = req.headers['x-forwarded-proto'] || 'https';
   const host = req.headers['x-forwarded-host'] || req.headers.host;
   return `${protocol}://${host}/auth/callback`;
 }
 
-/**
- * Handle GET /auth/login - Initiate OAuth2 flow
- */
 function handleLogin(req, res) {
   const state = crypto.randomBytes(16).toString('hex');
   const redirectUri = getRedirectUri(req);
@@ -131,7 +129,7 @@ async function handleCallback(req, res) {
       discriminator: userData.discriminator,
       avatar: userData.avatar,
       lastLogin: new Date().toISOString(),
-      pixelCount: firestore.FieldValue.increment(0) // Initialize if new
+      pixelCount: FieldValue.increment(0) // Initialize if new
     }, { merge: true });
 
     // Create JWT
