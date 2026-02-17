@@ -24,7 +24,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -61,16 +60,18 @@ func init() {
 	if err != nil {
 		log.Printf("OTel exporter failed: %v", err)
 	} else {
+		// Use WithFromEnv to pick up OTEL_SERVICE_NAME from environment
+		res, _ := resource.New(ctx,
+			resource.WithFromEnv(),
+			resource.WithTelemetrySDK(),
+		)
 		tp := sdktrace.NewTracerProvider(
 			sdktrace.WithBatcher(exporter),
-			sdktrace.WithResource(resource.NewWithAttributes(
-				semconv.SchemaURL,
-				semconv.ServiceNameKey.String("pixel-worker-go"),
-			)),
+			sdktrace.WithResource(res),
 		)
 		otel.SetTracerProvider(tp)
 	}
-	tracer = otel.Tracer("pixel-worker-go")
+	tracer = otel.Tracer("pixel-worker")
 }
 
 func getFirestore() *firestore.Client {

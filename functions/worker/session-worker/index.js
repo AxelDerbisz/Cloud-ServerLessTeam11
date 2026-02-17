@@ -9,20 +9,24 @@
  */
 
 // Initialize tracing before other imports
-const { NodeTracerProvider } = require('@opentelemetry/sdk-trace-node');
-const { TraceExporter } = require('@google-cloud/opentelemetry-cloud-trace-exporter');
-const { SimpleSpanProcessor } = require('@opentelemetry/sdk-trace-node');
+const { NodeTracerProvider, BatchSpanProcessor } = require('@opentelemetry/sdk-trace-node');
+const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-grpc');
 const { Resource } = require('@opentelemetry/resources');
 const { ATTR_SERVICE_NAME } = require('@opentelemetry/semantic-conventions');
 const { trace, SpanStatusCode, context } = require('@opentelemetry/api');
 
+// Use OTEL_SERVICE_NAME from environment, fallback to default
+const serviceName = process.env.OTEL_SERVICE_NAME || 'session-worker';
+
 const provider = new NodeTracerProvider({
   resource: new Resource({
-    [ATTR_SERVICE_NAME]: 'session-worker',
+    [ATTR_SERVICE_NAME]: serviceName,
   }),
 });
 
-provider.addSpanProcessor(new SimpleSpanProcessor(new TraceExporter()));
+// Use OTLP exporter (reads OTEL_EXPORTER_OTLP_ENDPOINT from env)
+const exporter = new OTLPTraceExporter();
+provider.addSpanProcessor(new BatchSpanProcessor(exporter));
 provider.register();
 
 const tracer = trace.getTracer('session-worker');
@@ -37,7 +41,7 @@ const firestore = new Firestore({ projectId: PROJECT_ID, databaseId: 'team11-dat
 
 const DISCORD_API_ENDPOINT = 'https://discord.com/api/v10';
 
-console.log('Cloud Trace initialized for session-worker');
+console.log(`OTLP tracing initialized for ${serviceName}`);
 
 /**
  * Send follow-up message to Discord

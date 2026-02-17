@@ -17,11 +17,12 @@ import (
 	"time"
 
 	"cloud.google.com/go/pubsub"
-	texporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace"
 	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -62,18 +63,24 @@ func init() {
 		}
 	}
 
-	// Initialize OpenTelemetry with Cloud Trace exporter
-	exporter, err := texporter.New(texporter.WithProjectID(projectID))
+	// Initialize OpenTelemetry with OTLP exporter (same as pixel-worker-go)
+	ctx := context.Background()
+	exporter, err := otlptracegrpc.New(ctx)
 	if err != nil {
-		log.Printf("Failed to create Cloud Trace exporter: %v", err)
+		log.Printf("Failed to create OTLP exporter: %v", err)
 	} else {
+		// Use WithFromEnv to pick up OTEL_SERVICE_NAME from environment
+		res, _ := resource.New(ctx,
+			resource.WithFromEnv(),
+			resource.WithTelemetrySDK(),
+		)
 		tracerProvider = sdktrace.NewTracerProvider(
-			sdktrace.WithBatcher(exporter), // Use Batcher with ForceFlush for serverless
-			sdktrace.WithSampler(sdktrace.AlwaysSample()),
+			sdktrace.WithBatcher(exporter),
+			sdktrace.WithResource(res),
 		)
 		otel.SetTracerProvider(tracerProvider)
 		tracer = tracerProvider.Tracer("discord-proxy")
-		log.Println("Cloud Trace initialized for discord-proxy")
+		log.Println("OTLP tracing initialized for discord-proxy")
 	}
 
 	functions.HTTP("handler", Handler)
