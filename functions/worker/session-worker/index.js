@@ -8,6 +8,29 @@
  * 4. Sends Discord follow-up messages
  */
 
+// Initialize tracing before other imports
+const { NodeTracerProvider, BatchSpanProcessor } = require('@opentelemetry/sdk-trace-node');
+const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-grpc');
+const { Resource } = require('@opentelemetry/resources');
+const { ATTR_SERVICE_NAME } = require('@opentelemetry/semantic-conventions');
+const { trace, SpanStatusCode, context } = require('@opentelemetry/api');
+
+// Use OTEL_SERVICE_NAME from environment, fallback to default
+const serviceName = process.env.OTEL_SERVICE_NAME || 'session-worker';
+
+const provider = new NodeTracerProvider({
+  resource: new Resource({
+    [ATTR_SERVICE_NAME]: serviceName,
+  }),
+});
+
+// Use OTLP exporter (reads OTEL_EXPORTER_OTLP_ENDPOINT from env)
+const exporter = new OTLPTraceExporter();
+provider.addSpanProcessor(new BatchSpanProcessor(exporter));
+provider.register();
+
+const tracer = trace.getTracer('session-worker');
+
 const functions = require('@google-cloud/functions-framework');
 const { Firestore } = require('@google-cloud/firestore');
 
@@ -17,6 +40,8 @@ const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const firestore = new Firestore({ projectId: PROJECT_ID, databaseId: 'team11-database' });
 
 const DISCORD_API_ENDPOINT = 'https://discord.com/api/v10';
+
+console.log(`OTLP tracing initialized for ${serviceName}`);
 
 /**
  * Send follow-up message to Discord
@@ -232,6 +257,24 @@ async function getCanvasStatus() {
 functions.cloudEvent('handler', async (cloudEvent) => {
   console.log('Session command received');
 
+  // Extract trace context from Pub/Sub message attributes
+  const attributes = cloudEvent.data.message.attributes || {};
+  let parentContext = context.active();
+  
+  if (attributes.traceId && attributes.spanId) {
+    // Create remote span context from propagated IDs
+    const remoteSpanContext = {
+      traceId: attributes.traceId,
+      spanId: attributes.spanId,
+      traceFlags: 1, // sampled
+      isRemote: true,
+    };
+    parentContext = trace.setSpanContext(context.active(), remoteSpanContext);
+  }
+
+  const span = tracer.startSpan('processSessionCommand', {}, parentContext);
+  const activeContext = trace.setSpan(parentContext, span);
+
   try {
     const data = cloudEvent.data.message.data;
     const messageData = JSON.parse(Buffer.from(data, 'base64').toString());
@@ -240,36 +283,52 @@ functions.cloudEvent('handler', async (cloudEvent) => {
 
     console.log(`Processing session action: ${action} by ${username}`);
 
+    // Add span attributes
+    span.setAttributes({
+      'session.action': action,
+      'session.user_id': userId,
+      'session.username': username,
+    });
+
     let result;
 
     switch (action) {
       case 'start':
+        span.updateName('session.start');
+        if (canvasWidth) span.setAttribute('session.canvas_width', canvasWidth);
+        if (canvasHeight) span.setAttribute('session.canvas_height', canvasHeight);
         result = await startSession({ userId, username, canvasWidth, canvasHeight });
         break;
 
       case 'pause':
+        span.updateName('session.pause');
         result = await pauseSession();
         break;
 
       case 'resume':
+        span.updateName('session.resume');
         result = await resumeSession();
         break;
 
       case 'reset':
+        span.updateName('session.reset');
         result = await resetCanvas();
         break;
 
       case 'end':
+        span.updateName('session.end');
         result = await endSession();
         break;
 
       case 'status':
+        span.updateName('session.status');
         result = await getCanvasStatus();
         break;
 
       default:
         console.error('Unknown session action:', action);
         result = { success: false, message: `❌ Unknown action: ${action}` };
+        span.setStatus({ code: SpanStatusCode.ERROR, message: `Unknown action: ${action}` });
     }
 
     // Send Discord follow-up
@@ -279,12 +338,24 @@ functions.cloudEvent('handler', async (cloudEvent) => {
 
     if (result.success) {
       console.log(`Session action '${action}' completed successfully`);
+      span.setStatus({ code: SpanStatusCode.OK });
     } else {
       console.error(`Session action '${action}' failed`);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: result.message });
       throw new Error(result.message);
     }
   } catch (error) {
     console.error('Error processing session command:', error);
+    span.recordException(error);
+    span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
     throw error; // Trigger retry
+  } finally {
+    span.end();
+    // Flush traces before function exits (required for serverless)
+    try {
+      await provider.forceFlush();
+    } catch (flushError) {
+      console.error('Failed to flush traces:', flushError);
+    }
   }
 });

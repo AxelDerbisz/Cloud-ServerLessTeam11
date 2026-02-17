@@ -41,6 +41,8 @@ resource "google_project_service" "required_apis" {
     "iam.googleapis.com",
     "logging.googleapis.com",
     "monitoring.googleapis.com",
+    "cloudtrace.googleapis.com",
+    "telemetry.googleapis.com",
   ])
 
   service            = each.value
@@ -95,8 +97,8 @@ locals {
   function_source_paths = {
     "discord-proxy"   = "../../../functions/proxy/discord-proxy"
     "auth-handler"    = "../../../functions/proxy/auth-handler"
-    "pixel-worker"    = "../../../functions/worker/pixel-worker"
-    "snapshot-worker" = "../../../functions/worker/snapshot-worker"
+    "pixel-worker"    = "../../../functions/worker/pixel-worker-go"
+    "snapshot-worker" = "../../../functions/worker/snapshot-worker-go"
     "session-worker"  = "../../../functions/worker/session-worker"
   }
 }
@@ -137,11 +139,13 @@ module "discord_proxy" {
   timeout                 = 60
 
   environment_variables = {
-    PROJECT_ID             = var.project_id
-    PIXEL_EVENTS_TOPIC     = module.pubsub.pixel_events_topic
-    SNAPSHOT_EVENTS_TOPIC  = module.pubsub.snapshot_events_topic
-    SESSION_EVENTS_TOPIC   = module.pubsub.session_events_topic
-    ADMIN_ROLE_IDS         = var.admin_role_ids
+    PROJECT_ID                   = var.project_id
+    PIXEL_EVENTS_TOPIC           = module.pubsub.pixel_events_topic
+    SNAPSHOT_EVENTS_TOPIC        = module.pubsub.snapshot_events_topic
+    SESSION_EVENTS_TOPIC         = module.pubsub.session_events_topic
+    ADMIN_ROLE_IDS               = var.admin_role_ids
+    OTEL_SERVICE_NAME            = "discord-proxy"
+    OTEL_EXPORTER_OTLP_ENDPOINT  = "https://telemetry.googleapis.com"
   }
 
   secret_environment_variables = [
@@ -178,12 +182,15 @@ module "auth_handler" {
   service_account_email   = module.iam.proxy_functions_sa_email
   allow_unauthenticated   = false
   gateway_service_account = module.iam.proxy_functions_sa_email
+  enable_gateway_invoker  = true
   memory                  = "256M"
   timeout                 = 60
 
   environment_variables = {
-    PROJECT_ID        = var.project_id
-    DISCORD_CLIENT_ID = var.discord_client_id
+    PROJECT_ID                   = var.project_id
+    DISCORD_CLIENT_ID            = var.discord_client_id
+    OTEL_SERVICE_NAME            = "auth-handler"
+    OTEL_EXPORTER_OTLP_ENDPOINT  = "https://telemetry.googleapis.com"
     # REDIRECT_URI will be constructed dynamically in the function from request headers
   }
 
@@ -215,6 +222,7 @@ module "pixel_worker" {
   project_id            = var.project_id
   region                = var.region
   function_name         = "pixel-worker"
+  runtime               = "go122"
   entry_point           = "handler"
   source_bucket         = module.storage.functions_source_bucket
   source_object         = google_storage_bucket_object.function_source_placeholder["pixel-worker"].name
@@ -225,8 +233,10 @@ module "pixel_worker" {
   timeout               = 120
 
   environment_variables = {
-    PROJECT_ID         = var.project_id
-    PUBLIC_PIXEL_TOPIC = module.pubsub.public_pixel_topic
+    PROJECT_ID                   = var.project_id
+    PUBLIC_PIXEL_TOPIC           = module.pubsub.public_pixel_topic
+    OTEL_SERVICE_NAME            = "pixel-worker"
+    OTEL_EXPORTER_OTLP_ENDPOINT  = "https://telemetry.googleapis.com"
   }
 
   secret_environment_variables = [
@@ -252,6 +262,7 @@ module "snapshot_worker" {
   project_id            = var.project_id
   region                = var.region
   function_name         = "snapshot-worker"
+  runtime               = "go122"
   entry_point           = "handler"
   source_bucket         = module.storage.functions_source_bucket
   source_object         = google_storage_bucket_object.function_source_placeholder["snapshot-worker"].name
@@ -262,8 +273,10 @@ module "snapshot_worker" {
   timeout               = 300
 
   environment_variables = {
-    PROJECT_ID              = var.project_id
-    SNAPSHOTS_BUCKET        = module.storage.canvas_snapshots_bucket
+    PROJECT_ID                   = var.project_id
+    SNAPSHOTS_BUCKET             = module.storage.canvas_snapshots_bucket
+    OTEL_SERVICE_NAME            = "snapshot-worker"
+    OTEL_EXPORTER_OTLP_ENDPOINT  = "https://telemetry.googleapis.com"
   }
 
   secret_environment_variables = [
@@ -299,7 +312,9 @@ module "session_worker" {
   timeout               = 120
 
   environment_variables = {
-    PROJECT_ID = var.project_id
+    PROJECT_ID                   = var.project_id
+    OTEL_SERVICE_NAME            = "session-worker"
+    OTEL_EXPORTER_OTLP_ENDPOINT  = "https://telemetry.googleapis.com"
   }
 
   secret_environment_variables = [

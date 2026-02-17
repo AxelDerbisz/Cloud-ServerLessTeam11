@@ -7,6 +7,31 @@
  * 3. GET /auth/me - Returns current user info from JWT
  */
 
+// Initialize tracing before other imports
+const { NodeTracerProvider, BatchSpanProcessor } = require('@opentelemetry/sdk-trace-node');
+const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-grpc');
+const { Resource } = require('@opentelemetry/resources');
+const { ATTR_SERVICE_NAME } = require('@opentelemetry/semantic-conventions');
+const { trace, SpanStatusCode } = require('@opentelemetry/api');
+
+// Use OTEL_SERVICE_NAME from environment, fallback to default
+const serviceName = process.env.OTEL_SERVICE_NAME || 'auth-handler';
+
+const provider = new NodeTracerProvider({
+  resource: new Resource({
+    [ATTR_SERVICE_NAME]: serviceName,
+  }),
+});
+
+// Use OTLP exporter (reads OTEL_EXPORTER_OTLP_ENDPOINT from env)
+const exporter = new OTLPTraceExporter();
+provider.addSpanProcessor(new BatchSpanProcessor(exporter));
+provider.register();
+
+const tracer = trace.getTracer('auth-handler');
+
+console.log(`OTLP tracing initialized for ${serviceName}`);
+
 const functions = require('@google-cloud/functions-framework');
 const { Firestore } = require('@google-cloud/firestore');
 const jwt = require('jsonwebtoken');
@@ -179,32 +204,68 @@ async function handleMe(req, res) {
  * HTTP function handler
  */
 functions.http('handler', async (req, res) => {
-  // Enable CORS
-  res.set('Access-Control-Allow-Origin', '*');
-  res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  const span = tracer.startSpan('auth-handler');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(204).send('');
+  try {
+    // Enable CORS
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+
+    if (req.method === 'OPTIONS') {
+      span.setAttribute('auth.operation', 'cors_preflight');
+      span.setStatus({ code: SpanStatusCode.OK });
+      return res.status(204).send('');
+    }
+
+    if (req.method !== 'GET') {
+      span.setAttribute('auth.operation', 'method_not_allowed');
+      span.setStatus({ code: SpanStatusCode.ERROR, message: 'Method not allowed' });
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+
+    const path = req.path || '/';
+    span.setAttribute('http.path', path);
+
+    if (path.startsWith('/auth/login') || path.includes('login')) {
+      span.setAttribute('auth.operation', 'login');
+      span.updateName('auth.login');
+      const result = handleLogin(req, res);
+      span.setStatus({ code: SpanStatusCode.OK });
+      return result;
+    }
+
+    if (path.startsWith('/auth/callback') || path.includes('callback')) {
+      span.setAttribute('auth.operation', 'callback');
+      span.updateName('auth.callback');
+      const result = await handleCallback(req, res);
+      span.setStatus({ code: SpanStatusCode.OK });
+      return result;
+    }
+
+    if (path.startsWith('/auth/me') || path.includes('/me')) {
+      span.setAttribute('auth.operation', 'me');
+      span.updateName('auth.me');
+      const result = await handleMe(req, res);
+      span.setStatus({ code: SpanStatusCode.OK });
+      return result;
+    }
+
+    span.setAttribute('auth.operation', 'not_found');
+    span.setStatus({ code: SpanStatusCode.ERROR, message: 'Not found' });
+    res.status(404).json({ error: 'Not found' });
+  } catch (error) {
+    console.error('Auth handler error:', error);
+    span.recordException(error);
+    span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+    res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    span.end();
+    // Flush traces before function exits (required for serverless)
+    try {
+      await provider.forceFlush();
+    } catch (flushError) {
+      console.error('Failed to flush traces:', flushError);
+    }
   }
-
-  if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  const path = req.path || '/';
-
-  if (path.startsWith('/auth/login') || path.includes('login')) {
-    return handleLogin(req, res);
-  }
-
-  if (path.startsWith('/auth/callback') || path.includes('callback')) {
-    return await handleCallback(req, res);
-  }
-
-  if (path.startsWith('/auth/me') || path.includes('/me')) {
-    return await handleMe(req, res);
-  }
-
-  res.status(404).json({ error: 'Not found' });
 });

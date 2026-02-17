@@ -103,6 +103,12 @@ variable "gateway_service_account" {
   default     = null
 }
 
+variable "enable_gateway_invoker" {
+  description = "Enable IAM binding for API Gateway to invoke this function (use this instead of checking gateway_service_account != null)"
+  type        = bool
+  default     = false
+}
+
 variable "labels" {
   description = "Labels for the function"
   type        = map(string)
