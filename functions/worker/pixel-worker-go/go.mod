@@ -6,7 +6,11 @@ require (
 	cloud.google.com/go/firestore v1.15.0
 	cloud.google.com/go/pubsub v1.37.0
 	github.com/GoogleCloudPlatform/functions-framework-go v1.8.1
+	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace v1.21.0
 	github.com/cloudevents/sdk-go/v2 v2.14.0
+	go.opentelemetry.io/otel v1.23.0
+	go.opentelemetry.io/otel/sdk v1.23.0
+	go.opentelemetry.io/otel/trace v1.23.0
 )
 
 require (

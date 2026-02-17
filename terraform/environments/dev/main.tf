@@ -41,6 +41,7 @@ resource "google_project_service" "required_apis" {
     "iam.googleapis.com",
     "logging.googleapis.com",
     "monitoring.googleapis.com",
+    "cloudtrace.googleapis.com",
   ])
 
   service            = each.value
@@ -95,8 +96,8 @@ locals {
   function_source_paths = {
     "discord-proxy"   = "../../../functions/proxy/discord-proxy"
     "auth-handler"    = "../../../functions/proxy/auth-handler"
-    "pixel-worker"    = "../../../functions/worker/pixel-worker"
-    "snapshot-worker" = "../../../functions/worker/snapshot-worker"
+    "pixel-worker"    = "../../../functions/worker/pixel-worker-go"
+    "snapshot-worker" = "../../../functions/worker/snapshot-worker-go"
     "session-worker"  = "../../../functions/worker/session-worker"
   }
 }
@@ -112,7 +113,8 @@ data "archive_file" "function_source" {
 resource "google_storage_bucket_object" "function_source_placeholder" {
   for_each = local.function_source_paths
 
-  name   = "${each.key}/source.zip"
+  # Include content hash in name so Terraform detects source code changes
+  name   = "${each.key}/source-${data.archive_file.function_source[each.key].output_md5}.zip"
   bucket = module.storage.functions_source_bucket
   source = data.archive_file.function_source[each.key].output_path
 
@@ -133,6 +135,7 @@ module "discord_proxy" {
   service_account_email   = module.iam.proxy_functions_sa_email
   allow_unauthenticated   = false
   gateway_service_account = module.iam.proxy_functions_sa_email
+  enable_gateway_invoker  = true
   memory                  = "256M"
   timeout                 = 60
 
@@ -141,7 +144,6 @@ module "discord_proxy" {
     PIXEL_EVENTS_TOPIC     = module.pubsub.pixel_events_topic
     SNAPSHOT_EVENTS_TOPIC  = module.pubsub.snapshot_events_topic
     SESSION_EVENTS_TOPIC   = module.pubsub.session_events_topic
-    ADMIN_ROLE_IDS         = var.admin_role_ids
   }
 
   secret_environment_variables = [
@@ -153,6 +155,11 @@ module "discord_proxy" {
     {
       key     = "DISCORD_BOT_TOKEN"
       secret  = "discord-bot-token"
+      version = "latest"
+    },
+    {
+      key     = "ADMIN_ROLE_IDS"
+      secret  = "admin-role-ids"
       version = "latest"
     }
   ]
@@ -178,6 +185,7 @@ module "auth_handler" {
   service_account_email   = module.iam.proxy_functions_sa_email
   allow_unauthenticated   = false
   gateway_service_account = module.iam.proxy_functions_sa_email
+  enable_gateway_invoker  = true
   memory                  = "256M"
   timeout                 = 60
 
@@ -215,6 +223,7 @@ module "pixel_worker" {
   project_id            = var.project_id
   region                = var.region
   function_name         = "pixel-worker"
+  runtime               = "go122"
   entry_point           = "handler"
   source_bucket         = module.storage.functions_source_bucket
   source_object         = google_storage_bucket_object.function_source_placeholder["pixel-worker"].name
@@ -252,6 +261,7 @@ module "snapshot_worker" {
   project_id            = var.project_id
   region                = var.region
   function_name         = "snapshot-worker"
+  runtime               = "go122"
   entry_point           = "handler"
   source_bucket         = module.storage.functions_source_bucket
   source_object         = google_storage_bucket_object.function_source_placeholder["snapshot-worker"].name

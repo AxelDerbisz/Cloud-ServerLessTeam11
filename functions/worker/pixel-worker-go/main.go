@@ -16,8 +16,14 @@ import (
 
 	"cloud.google.com/go/firestore"
 	"cloud.google.com/go/pubsub"
+	texporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace"
 	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
 	"github.com/cloudevents/sdk-go/v2/event"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -36,6 +42,8 @@ var (
 	fsOnce           sync.Once
 	psOnce           sync.Once
 	hexColorRegex    = regexp.MustCompile(`^[0-9A-Fa-f]{6}$`)
+	tracer           trace.Tracer
+	tracerProvider   *sdktrace.TracerProvider
 )
 
 func init() {
@@ -45,6 +53,21 @@ func init() {
 	if publicPixelTopic == "" {
 		publicPixelTopic = "public-pixel"
 	}
+
+	// Initialize OpenTelemetry with Cloud Trace exporter
+	exporter, err := texporter.New(texporter.WithProjectID(projectID))
+	if err != nil {
+		log.Printf("Failed to create Cloud Trace exporter: %v", err)
+	} else {
+		tracerProvider = sdktrace.NewTracerProvider(
+			sdktrace.WithBatcher(exporter), // Use Batcher with ForceFlush for serverless
+			sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		)
+		otel.SetTracerProvider(tracerProvider)
+		tracer = tracerProvider.Tracer("pixel-worker")
+		log.Println("Cloud Trace initialized for pixel-worker")
+	}
+
 	functions.CloudEvent("handler", handleCloudEvent)
 }
 
@@ -73,7 +96,8 @@ func getPubsub() *pubsub.Client {
 // CloudEvent Pub/Sub data
 type MessagePublishedData struct {
 	Message struct {
-		Data []byte `json:"data"`
+		Data       []byte            `json:"data"`
+		Attributes map[string]string `json:"attributes"`
 	} `json:"message"`
 }
 
@@ -262,6 +286,29 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 		return fmt.Errorf("parse event: %w", err)
 	}
 
+	// Extract trace context from Pub/Sub attributes and create linked span
+	if tracer != nil {
+		var span trace.Span
+		if traceID := msg.Message.Attributes["traceId"]; traceID != "" {
+			if spanID := msg.Message.Attributes["spanId"]; spanID != "" {
+				// Parse trace and span IDs
+				tid, _ := trace.TraceIDFromHex(traceID)
+				sid, _ := trace.SpanIDFromHex(spanID)
+				
+				// Create remote span context as parent
+				parentCtx := trace.NewSpanContext(trace.SpanContextConfig{
+					TraceID:    tid,
+					SpanID:     sid,
+					TraceFlags: trace.FlagsSampled,
+					Remote:     true,
+				})
+				ctx = trace.ContextWithRemoteSpanContext(ctx, parentCtx)
+			}
+		}
+		ctx, span = tracer.Start(ctx, "processPixel")
+		defer span.End()
+	}
+
 	var ev PixelEvent
 	if err := json.Unmarshal(msg.Message.Data, &ev); err != nil {
 		return fmt.Errorf("parse pixel event: %w", err)
@@ -273,6 +320,17 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 
 	log.Printf("Pixel: (%d,%d) #%s by %s [%s]", ev.X, ev.Y, ev.Color, ev.Username, ev.Source)
 
+	// Add span attributes
+	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
+		span.SetAttributes(
+			attribute.Int("pixel.x", ev.X),
+			attribute.Int("pixel.y", ev.Y),
+			attribute.String("pixel.color", ev.Color),
+			attribute.String("pixel.user_id", ev.UserID),
+			attribute.String("pixel.source", ev.Source),
+		)
+	}
+
 	reply := func(msg string) {
 		if ev.Source == "discord" {
 			sendFollowUp(ev.ApplicationID, ev.InteractionToken, msg)
@@ -282,6 +340,9 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	// Validate color
 	if !hexColorRegex.MatchString(ev.Color) {
 		reply(fmt.Sprintf("Invalid color format: %s. Use 6-digit hex (e.g., FF0000)", ev.Color))
+		if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
+			span.SetStatus(codes.Error, "invalid color format")
+		}
 		return nil
 	}
 
@@ -289,6 +350,9 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	valid, reason := validateBounds(ctx, ev.X, ev.Y)
 	if !valid {
 		reply(reason)
+		if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
+			span.SetStatus(codes.Error, reason)
+		}
 		return nil
 	}
 
@@ -296,12 +360,19 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	allowed, count := checkRateLimit(ctx, ev.UserID)
 	if !allowed {
 		reply(fmt.Sprintf("Rate limit exceeded (%d/%d per minute)", count, rateLimitMax))
+		if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
+			span.SetStatus(codes.Error, "rate limited")
+			span.SetAttributes(attribute.Int("rate_limit.count", count))
+		}
 		return nil
 	}
 
 	// Update pixel
 	if !updatePixel(ctx, ev.X, ev.Y, ev.Color, ev.UserID, ev.Username, ev.Source) {
 		reply("Failed to place pixel")
+		if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
+			span.SetStatus(codes.Error, "failed to update pixel")
+		}
 		return nil
 	}
 
@@ -309,6 +380,13 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	publishPixelUpdate(ctx, ev.X, ev.Y, ev.Color, ev.UserID, ev.Username)
 
 	reply(fmt.Sprintf("Pixel placed at (%d, %d) with color #%s", ev.X, ev.Y, ev.Color))
+
+	// Flush traces before function exits (required for serverless)
+	if tracerProvider != nil {
+		if err := tracerProvider.ForceFlush(ctx); err != nil {
+			log.Printf("Failed to flush traces: %v", err)
+		}
+	}
 
 	return nil
 }

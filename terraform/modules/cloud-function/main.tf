@@ -66,11 +66,22 @@ resource "google_cloud_run_service_iam_member" "invoker" {
 
 # Allow API Gateway service account to invoke HTTP functions
 resource "google_cloud_run_service_iam_member" "gateway_invoker" {
-  count = var.gateway_service_account != null && var.trigger_topic == null ? 1 : 0
+  count = var.enable_gateway_invoker && var.trigger_topic == null ? 1 : 0
 
   project  = google_cloudfunctions2_function.function.project
   location = google_cloudfunctions2_function.function.location
   service  = google_cloudfunctions2_function.function.name
   role     = "roles/run.invoker"
   member   = "serviceAccount:${var.gateway_service_account}"
+}
+
+# Allow the event trigger service account to invoke Pub/Sub triggered functions
+resource "google_cloud_run_service_iam_member" "pubsub_invoker" {
+  count = var.trigger_topic != null ? 1 : 0
+
+  project  = google_cloudfunctions2_function.function.project
+  location = google_cloudfunctions2_function.function.location
+  service  = google_cloudfunctions2_function.function.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${var.service_account_email}"
 }

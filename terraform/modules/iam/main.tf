@@ -82,3 +82,27 @@ resource "google_project_iam_member" "proxy_log_writer" {
   role    = "roles/logging.logWriter"
   member  = "serviceAccount:${google_service_account.proxy_functions.email}"
 }
+
+# Cloud Trace permissions for distributed tracing
+resource "google_project_iam_member" "proxy_trace_agent" {
+  project = var.project_id
+  role    = "roles/cloudtrace.agent"
+  member  = "serviceAccount:${google_service_account.proxy_functions.email}"
+}
+
+resource "google_project_iam_member" "worker_trace_agent" {
+  project = var.project_id
+  role    = "roles/cloudtrace.agent"
+  member  = "serviceAccount:${google_service_account.worker_functions.email}"
+}
+
+# Allow Pub/Sub service agent to invoke worker functions (for Pub/Sub triggers)
+data "google_project" "project" {
+  project_id = var.project_id
+}
+
+resource "google_project_iam_member" "pubsub_token_creator" {
+  project = var.project_id
+  role    = "roles/iam.serviceAccountTokenCreator"
+  member  = "serviceAccount:service-${data.google_project.project.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
