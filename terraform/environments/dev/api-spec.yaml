@@ -3,10 +3,13 @@ info:
   title: "Pixel Canvas API"
   description: "API Gateway for serverless pixel canvas application"
   version: "2.0.0"
+
 schemes:
   - "https"
+
 produces:
   - "application/json"
+
 paths:
   /discord/webhook:
     post:
@@ -22,3 +25,25 @@ paths:
           description: "Unauthorized"
         500:
           description: "Internal server error"
+
+  /auth/start:
+    get:
+      summary: "Start Discord OAuth"
+      operationId: "authStart"
+      x-google-backend:
+        address: "${auth_handler_url}"
+        protocol: "h2"
+      responses:
+        302:
+          description: "Redirect to Discord"
+
+  /auth/callback:
+    get:
+      summary: "Discord OAuth callback"
+      operationId: "authCallback"
+      x-google-backend:
+        address: "${auth_handler_url}"
+        protocol: "h2"
+      responses:
+        200:
+          description: "JWT returned"
