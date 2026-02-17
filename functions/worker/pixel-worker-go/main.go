@@ -16,13 +16,15 @@ import (
 
 	"cloud.google.com/go/firestore"
 	"cloud.google.com/go/pubsub"
-	texporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace"
 	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
 	"github.com/cloudevents/sdk-go/v2/event"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -43,7 +45,6 @@ var (
 	psOnce           sync.Once
 	hexColorRegex    = regexp.MustCompile(`^[0-9A-Fa-f]{6}$`)
 	tracer           trace.Tracer
-	tracerProvider   *sdktrace.TracerProvider
 )
 
 func init() {
@@ -53,22 +54,23 @@ func init() {
 	if publicPixelTopic == "" {
 		publicPixelTopic = "public-pixel"
 	}
-
-	// Initialize OpenTelemetry with Cloud Trace exporter
-	exporter, err := texporter.New(texporter.WithProjectID(projectID))
-	if err != nil {
-		log.Printf("Failed to create Cloud Trace exporter: %v", err)
-	} else {
-		tracerProvider = sdktrace.NewTracerProvider(
-			sdktrace.WithBatcher(exporter), // Use Batcher with ForceFlush for serverless
-			sdktrace.WithSampler(sdktrace.AlwaysSample()),
-		)
-		otel.SetTracerProvider(tracerProvider)
-		tracer = tracerProvider.Tracer("pixel-worker")
-		log.Println("Cloud Trace initialized for pixel-worker")
-	}
-
 	functions.CloudEvent("handler", handleCloudEvent)
+
+	ctx := context.Background()
+	exporter, err := otlptracegrpc.New(ctx)
+	if err != nil {
+		log.Printf("OTel exporter failed: %v", err)
+	} else {
+		tp := sdktrace.NewTracerProvider(
+			sdktrace.WithBatcher(exporter),
+			sdktrace.WithResource(resource.NewWithAttributes(
+				semconv.SchemaURL,
+				semconv.ServiceNameKey.String("pixel-worker-go"),
+			)),
+		)
+		otel.SetTracerProvider(tp)
+	}
+	tracer = otel.Tracer("pixel-worker-go")
 }
 
 func getFirestore() *firestore.Client {
@@ -96,8 +98,7 @@ func getPubsub() *pubsub.Client {
 // CloudEvent Pub/Sub data
 type MessagePublishedData struct {
 	Message struct {
-		Data       []byte            `json:"data"`
-		Attributes map[string]string `json:"attributes"`
+		Data []byte `json:"data"`
 	} `json:"message"`
 }
 
@@ -129,6 +130,11 @@ func sendFollowUp(appID, token, content string) {
 }
 
 func checkRateLimit(ctx context.Context, userID string) (bool, int) {
+	ctx, span := tracer.Start(ctx, "checkRateLimit")
+	defer span.End()
+
+	span.SetAttributes(attribute.String("user.id", userID))
+
 	now := time.Now()
 	minute := now.Unix() / rateLimitWindow
 	docID := fmt.Sprintf("%s_%d", userID, minute)
@@ -172,6 +178,11 @@ func checkRateLimit(ctx context.Context, userID string) (bool, int) {
 		log.Printf("Rate limit check failed: %v", err)
 		return true, 0 // fail open
 	}
+
+	span.SetAttributes(
+		attribute.Bool("rate_limit.allowed", allowed),
+		attribute.Int("rate_limit.count", count),
+	)
 	return allowed, count
 }
 
@@ -204,6 +215,16 @@ func validateBounds(ctx context.Context, x, y int) (bool, string) {
 }
 
 func updatePixel(ctx context.Context, x, y int, color, userID, username, source string) bool {
+	ctx, span := tracer.Start(ctx, "updatePixel")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.Int("pixel.x", x),
+		attribute.Int("pixel.y", y),
+		attribute.String("pixel.color", color),
+		attribute.String("user.id", userID),
+	)
+
 	pixelID := fmt.Sprintf("%d_%d", x, y)
 	pixelRef := getFirestore().Collection("pixels").Doc(pixelID)
 	userRef := getFirestore().Collection("users").Doc(userID)
@@ -243,8 +264,10 @@ func updatePixel(ctx context.Context, x, y int, color, userID, username, source 
 
 	if err != nil {
 		log.Printf("Failed to update pixel: %v", err)
+		span.SetAttributes(attribute.Bool("success", false))
 		return false
 	}
+	span.SetAttributes(attribute.Bool("success", true))
 	return true
 }
 
@@ -281,32 +304,12 @@ func toInt(v interface{}) int {
 }
 
 func handleCloudEvent(ctx context.Context, e event.Event) error {
+	ctx, span := tracer.Start(ctx, "pixel_worker.handle_event")
+	defer span.End()
+
 	var msg MessagePublishedData
 	if err := e.DataAs(&msg); err != nil {
 		return fmt.Errorf("parse event: %w", err)
-	}
-
-	// Extract trace context from Pub/Sub attributes and create linked span
-	if tracer != nil {
-		var span trace.Span
-		if traceID := msg.Message.Attributes["traceId"]; traceID != "" {
-			if spanID := msg.Message.Attributes["spanId"]; spanID != "" {
-				// Parse trace and span IDs
-				tid, _ := trace.TraceIDFromHex(traceID)
-				sid, _ := trace.SpanIDFromHex(spanID)
-				
-				// Create remote span context as parent
-				parentCtx := trace.NewSpanContext(trace.SpanContextConfig{
-					TraceID:    tid,
-					SpanID:     sid,
-					TraceFlags: trace.FlagsSampled,
-					Remote:     true,
-				})
-				ctx = trace.ContextWithRemoteSpanContext(ctx, parentCtx)
-			}
-		}
-		ctx, span = tracer.Start(ctx, "processPixel")
-		defer span.End()
 	}
 
 	var ev PixelEvent
@@ -320,17 +323,6 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 
 	log.Printf("Pixel: (%d,%d) #%s by %s [%s]", ev.X, ev.Y, ev.Color, ev.Username, ev.Source)
 
-	// Add span attributes
-	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
-		span.SetAttributes(
-			attribute.Int("pixel.x", ev.X),
-			attribute.Int("pixel.y", ev.Y),
-			attribute.String("pixel.color", ev.Color),
-			attribute.String("pixel.user_id", ev.UserID),
-			attribute.String("pixel.source", ev.Source),
-		)
-	}
-
 	reply := func(msg string) {
 		if ev.Source == "discord" {
 			sendFollowUp(ev.ApplicationID, ev.InteractionToken, msg)
@@ -340,9 +332,6 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	// Validate color
 	if !hexColorRegex.MatchString(ev.Color) {
 		reply(fmt.Sprintf("Invalid color format: %s. Use 6-digit hex (e.g., FF0000)", ev.Color))
-		if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
-			span.SetStatus(codes.Error, "invalid color format")
-		}
 		return nil
 	}
 
@@ -350,9 +339,6 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	valid, reason := validateBounds(ctx, ev.X, ev.Y)
 	if !valid {
 		reply(reason)
-		if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
-			span.SetStatus(codes.Error, reason)
-		}
 		return nil
 	}
 
@@ -360,19 +346,12 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	allowed, count := checkRateLimit(ctx, ev.UserID)
 	if !allowed {
 		reply(fmt.Sprintf("Rate limit exceeded (%d/%d per minute)", count, rateLimitMax))
-		if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
-			span.SetStatus(codes.Error, "rate limited")
-			span.SetAttributes(attribute.Int("rate_limit.count", count))
-		}
 		return nil
 	}
 
 	// Update pixel
 	if !updatePixel(ctx, ev.X, ev.Y, ev.Color, ev.UserID, ev.Username, ev.Source) {
 		reply("Failed to place pixel")
-		if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
-			span.SetStatus(codes.Error, "failed to update pixel")
-		}
 		return nil
 	}
 
@@ -380,13 +359,6 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	publishPixelUpdate(ctx, ev.X, ev.Y, ev.Color, ev.UserID, ev.Username)
 
 	reply(fmt.Sprintf("Pixel placed at (%d, %d) with color #%s", ev.X, ev.Y, ev.Color))
-
-	// Flush traces before function exits (required for serverless)
-	if tracerProvider != nil {
-		if err := tracerProvider.ForceFlush(ctx); err != nil {
-			log.Printf("Failed to flush traces: %v", err)
-		}
-	}
 
 	return nil
 }

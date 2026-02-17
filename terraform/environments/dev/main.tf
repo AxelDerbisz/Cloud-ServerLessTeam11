@@ -42,6 +42,7 @@ resource "google_project_service" "required_apis" {
     "logging.googleapis.com",
     "monitoring.googleapis.com",
     "cloudtrace.googleapis.com",
+    "telemetry.googleapis.com",
   ])
 
   service            = each.value
@@ -113,8 +114,7 @@ data "archive_file" "function_source" {
 resource "google_storage_bucket_object" "function_source_placeholder" {
   for_each = local.function_source_paths
 
-  # Include content hash in name so Terraform detects source code changes
-  name   = "${each.key}/source-${data.archive_file.function_source[each.key].output_md5}.zip"
+  name   = "${each.key}/source.zip"
   bucket = module.storage.functions_source_bucket
   source = data.archive_file.function_source[each.key].output_path
 
@@ -135,7 +135,6 @@ module "discord_proxy" {
   service_account_email   = module.iam.proxy_functions_sa_email
   allow_unauthenticated   = false
   gateway_service_account = module.iam.proxy_functions_sa_email
-  enable_gateway_invoker  = true
   memory                  = "256M"
   timeout                 = 60
 
@@ -144,6 +143,7 @@ module "discord_proxy" {
     PIXEL_EVENTS_TOPIC     = module.pubsub.pixel_events_topic
     SNAPSHOT_EVENTS_TOPIC  = module.pubsub.snapshot_events_topic
     SESSION_EVENTS_TOPIC   = module.pubsub.session_events_topic
+    ADMIN_ROLE_IDS         = var.admin_role_ids
   }
 
   secret_environment_variables = [
@@ -155,11 +155,6 @@ module "discord_proxy" {
     {
       key     = "DISCORD_BOT_TOKEN"
       secret  = "discord-bot-token"
-      version = "latest"
-    },
-    {
-      key     = "ADMIN_ROLE_IDS"
-      secret  = "admin-role-ids"
       version = "latest"
     }
   ]
@@ -185,7 +180,6 @@ module "auth_handler" {
   service_account_email   = module.iam.proxy_functions_sa_email
   allow_unauthenticated   = false
   gateway_service_account = module.iam.proxy_functions_sa_email
-  enable_gateway_invoker  = true
   memory                  = "256M"
   timeout                 = 60
 
