@@ -18,6 +18,13 @@ import (
 	"cloud.google.com/go/pubsub"
 	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
 	"github.com/cloudevents/sdk-go/v2/event"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -36,6 +43,7 @@ var (
 	fsOnce           sync.Once
 	psOnce           sync.Once
 	hexColorRegex    = regexp.MustCompile(`^[0-9A-Fa-f]{6}$`)
+	tracer           trace.Tracer
 )
 
 func init() {
@@ -46,6 +54,24 @@ func init() {
 		publicPixelTopic = "public-pixel"
 	}
 	functions.CloudEvent("handler", handleCloudEvent)
+
+	ctx := context.Background()
+	exporter, err := otlptracegrpc.New(ctx)
+	if err != nil {
+		log.Printf("OTel exporter failed: %v", err)
+	} else {
+		// Use WithFromEnv to pick up OTEL_SERVICE_NAME from environment
+		res, _ := resource.New(ctx,
+			resource.WithFromEnv(),
+			resource.WithTelemetrySDK(),
+		)
+		tp := sdktrace.NewTracerProvider(
+			sdktrace.WithBatcher(exporter),
+			sdktrace.WithResource(res),
+		)
+		otel.SetTracerProvider(tp)
+	}
+	tracer = otel.Tracer("pixel-worker")
 }
 
 func getFirestore() *firestore.Client {
@@ -105,6 +131,11 @@ func sendFollowUp(appID, token, content string) {
 }
 
 func checkRateLimit(ctx context.Context, userID string) (bool, int) {
+	ctx, span := tracer.Start(ctx, "checkRateLimit")
+	defer span.End()
+
+	span.SetAttributes(attribute.String("user.id", userID))
+
 	now := time.Now()
 	minute := now.Unix() / rateLimitWindow
 	docID := fmt.Sprintf("%s_%d", userID, minute)
@@ -148,6 +179,11 @@ func checkRateLimit(ctx context.Context, userID string) (bool, int) {
 		log.Printf("Rate limit check failed: %v", err)
 		return true, 0 // fail open
 	}
+
+	span.SetAttributes(
+		attribute.Bool("rate_limit.allowed", allowed),
+		attribute.Int("rate_limit.count", count),
+	)
 	return allowed, count
 }
 
@@ -180,6 +216,16 @@ func validateBounds(ctx context.Context, x, y int) (bool, string) {
 }
 
 func updatePixel(ctx context.Context, x, y int, color, userID, username, source string) bool {
+	ctx, span := tracer.Start(ctx, "updatePixel")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.Int("pixel.x", x),
+		attribute.Int("pixel.y", y),
+		attribute.String("pixel.color", color),
+		attribute.String("user.id", userID),
+	)
+
 	pixelID := fmt.Sprintf("%d_%d", x, y)
 	pixelRef := getFirestore().Collection("pixels").Doc(pixelID)
 	userRef := getFirestore().Collection("users").Doc(userID)
@@ -219,8 +265,10 @@ func updatePixel(ctx context.Context, x, y int, color, userID, username, source 
 
 	if err != nil {
 		log.Printf("Failed to update pixel: %v", err)
+		span.SetAttributes(attribute.Bool("success", false))
 		return false
 	}
+	span.SetAttributes(attribute.Bool("success", true))
 	return true
 }
 
@@ -257,6 +305,9 @@ func toInt(v interface{}) int {
 }
 
 func handleCloudEvent(ctx context.Context, e event.Event) error {
+	ctx, span := tracer.Start(ctx, "pixel_worker.handle_event")
+	defer span.End()
+
 	var msg MessagePublishedData
 	if err := e.DataAs(&msg); err != nil {
 		return fmt.Errorf("parse event: %w", err)

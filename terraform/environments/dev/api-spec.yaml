@@ -22,3 +22,52 @@ paths:
           description: "Unauthorized"
         500:
           description: "Internal server error"
+  /auth/login:
+    get:
+      summary: "Initiate Discord OAuth2 login"
+      operationId: "authLogin"
+      x-google-backend:
+        address: "${auth_handler_url}/auth/login"
+        protocol: "h2"
+      responses:
+        302:
+          description: "Redirect to Discord OAuth2"
+        500:
+          description: "Internal server error"
+  /auth/callback:
+    get:
+      summary: "OAuth2 callback endpoint"
+      operationId: "authCallback"
+      x-google-backend:
+        address: "${auth_handler_url}/auth/callback"
+        protocol: "h2"
+      parameters:
+        - name: code
+          in: query
+          type: string
+          required: true
+        - name: state
+          in: query
+          type: string
+          required: false
+      responses:
+        200:
+          description: "Authentication successful, returns JWT"
+        400:
+          description: "Missing authorization code"
+        500:
+          description: "Authentication failed"
+  /auth/me:
+    get:
+      summary: "Get current user info"
+      operationId: "authMe"
+      x-google-backend:
+        address: "${auth_handler_url}/auth/me"
+        protocol: "h2"
+      responses:
+        200:
+          description: "User info"
+        401:
+          description: "Unauthorized"
+        404:
+          description: "User not found"

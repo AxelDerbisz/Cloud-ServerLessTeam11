@@ -22,6 +22,12 @@ import (
 	"cloud.google.com/go/storage"
 	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
 	"github.com/cloudevents/sdk-go/v2/event"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -38,12 +44,35 @@ var (
 	stClient        *storage.Client
 	fsOnce          sync.Once
 	stOnce          sync.Once
+	tracer          trace.Tracer
+	tracerProvider  *sdktrace.TracerProvider
 )
 
 func init() {
 	projectID = os.Getenv("PROJECT_ID")
 	snapshotsBucket = os.Getenv("SNAPSHOTS_BUCKET")
 	discordBotToken = strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
+
+	// Initialize OpenTelemetry with OTLP exporter
+	ctx := context.Background()
+	exporter, err := otlptracegrpc.New(ctx)
+	if err != nil {
+		log.Printf("Failed to create OTLP exporter: %v", err)
+	} else {
+		// Use WithFromEnv to pick up OTEL_SERVICE_NAME from environment
+		res, _ := resource.New(ctx,
+			resource.WithFromEnv(),
+			resource.WithTelemetrySDK(),
+		)
+		tracerProvider = sdktrace.NewTracerProvider(
+			sdktrace.WithBatcher(exporter),
+			sdktrace.WithResource(res),
+		)
+		otel.SetTracerProvider(tracerProvider)
+		tracer = tracerProvider.Tracer("snapshot-worker")
+		log.Println("OTLP tracing initialized for snapshot-worker")
+	}
+
 	functions.CloudEvent("handler", handleCloudEvent)
 }
 
@@ -99,7 +128,8 @@ type Manifest struct {
 // CloudEvent Pub/Sub data
 type MessagePublishedData struct {
 	Message struct {
-		Data []byte `json:"data"`
+		Data       []byte            `json:"data"`
+		Attributes map[string]string `json:"attributes"`
 	} `json:"message"`
 }
 
@@ -259,6 +289,29 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 		return fmt.Errorf("parse event: %w", err)
 	}
 
+	// Extract trace context from Pub/Sub attributes and create linked span
+	if tracer != nil {
+		var span trace.Span
+		if traceID := msg.Message.Attributes["traceId"]; traceID != "" {
+			if spanID := msg.Message.Attributes["spanId"]; spanID != "" {
+				// Parse trace and span IDs
+				tid, _ := trace.TraceIDFromHex(traceID)
+				sid, _ := trace.SpanIDFromHex(spanID)
+				
+				// Create remote span context as parent
+				parentCtx := trace.NewSpanContext(trace.SpanContextConfig{
+					TraceID:    tid,
+					SpanID:     sid,
+					TraceFlags: trace.FlagsSampled,
+					Remote:     true,
+				})
+				ctx = trace.ContextWithRemoteSpanContext(ctx, parentCtx)
+			}
+		}
+		ctx, span = tracer.Start(ctx, "generateSnapshot")
+		defer span.End()
+	}
+
 	var req SnapshotRequest
 	if err := json.Unmarshal(msg.Message.Data, &req); err != nil {
 		return fmt.Errorf("parse request: %w", err)
@@ -276,6 +329,15 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 		}
 	}
 	log.Printf("Canvas: %dx%d", canvasW, canvasH)
+
+	// Add span attributes
+	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
+		span.SetAttributes(
+			attribute.Int("canvas.width", canvasW),
+			attribute.Int("canvas.height", canvasH),
+			attribute.String("snapshot.user_id", req.UserID),
+		)
+	}
 
 	// Get all pixels
 	pixels, err := getAllPixels(ctx)
@@ -376,6 +438,15 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	elapsed := time.Since(start)
 	log.Printf("Snapshot complete: %d sparse tiles, %d pixels in %v", len(results), len(pixels), elapsed)
 
+	// Add final span attributes
+	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
+		span.SetAttributes(
+			attribute.Int("snapshot.pixel_count", len(pixels)),
+			attribute.Int("snapshot.tile_count", len(results)),
+			attribute.Float64("snapshot.duration_seconds", elapsed.Seconds()),
+		)
+	}
+
 	// Post to Discord
 	if req.ChannelID != "" {
 		postToDiscord(req.ChannelID, thumbURL, manifest)
@@ -386,6 +457,13 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 		msg := fmt.Sprintf("Snapshot generated in %.1fs: %d tiles (%d pixels)\nManifest: %s",
 			elapsed.Seconds(), len(results), len(pixels), manifestURL)
 		sendFollowUp(req.ApplicationID, req.InteractionToken, msg)
+	}
+
+	// Flush traces before function exits (required for serverless)
+	if tracerProvider != nil {
+		if err := tracerProvider.ForceFlush(ctx); err != nil {
+			log.Printf("Failed to flush traces: %v", err)
+		}
 	}
 
 	return nil
