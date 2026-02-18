@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -21,7 +22,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	texporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
@@ -44,6 +45,7 @@ var (
 	psOnce           sync.Once
 	hexColorRegex    = regexp.MustCompile(`^[0-9A-Fa-f]{6}$`)
 	tracer           trace.Tracer
+	tracerProvider   *sdktrace.TracerProvider
 )
 
 func init() {
@@ -56,22 +58,30 @@ func init() {
 	functions.CloudEvent("handler", handleCloudEvent)
 
 	ctx := context.Background()
-	exporter, err := otlptracegrpc.New(ctx)
-	if err != nil {
-		log.Printf("OTel exporter failed: %v", err)
-	} else {
-		// Use WithFromEnv to pick up OTEL_SERVICE_NAME from environment
+	exporter, err := texporter.New(texporter.WithProjectID(projectID))
+	if err == nil {
 		res, _ := resource.New(ctx,
 			resource.WithFromEnv(),
 			resource.WithTelemetrySDK(),
 		)
-		tp := sdktrace.NewTracerProvider(
+		tracerProvider = sdktrace.NewTracerProvider(
 			sdktrace.WithBatcher(exporter),
 			sdktrace.WithResource(res),
 		)
-		otel.SetTracerProvider(tp)
+		otel.SetTracerProvider(tracerProvider)
 	}
 	tracer = otel.Tracer("pixel-worker")
+
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.MessageKey {
+				a.Key = "message"
+			} else if a.Key == slog.LevelKey {
+				a.Key = "severity"
+			}
+			return a
+		},
+	})))
 }
 
 func getFirestore() *firestore.Client {
@@ -99,7 +109,8 @@ func getPubsub() *pubsub.Client {
 // CloudEvent Pub/Sub data
 type MessagePublishedData struct {
 	Message struct {
-		Data []byte `json:"data"`
+		Data       []byte            `json:"data"`
+		Attributes map[string]string `json:"attributes"`
 	} `json:"message"`
 }
 
@@ -124,7 +135,6 @@ func sendFollowUp(appID, token, content string) {
 	req.Header.Set("Authorization", "Bot "+discordBotToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("Discord follow-up failed: %v", err)
 		return
 	}
 	resp.Body.Close()
@@ -176,7 +186,6 @@ func checkRateLimit(ctx context.Context, userID string) (bool, int) {
 	})
 
 	if err != nil {
-		log.Printf("Rate limit check failed: %v", err)
 		return true, 0 // fail open
 	}
 
@@ -264,7 +273,6 @@ func updatePixel(ctx context.Context, x, y int, color, userID, username, source 
 	})
 
 	if err != nil {
-		log.Printf("Failed to update pixel: %v", err)
 		span.SetAttributes(attribute.Bool("success", false))
 		return false
 	}
@@ -288,9 +296,7 @@ func publishPixelUpdate(ctx context.Context, x, y int, color, userID, username s
 		Attributes: map[string]string{"type": "pixel_update"},
 	})
 
-	if _, err := result.Get(ctx); err != nil {
-		log.Printf("Failed to publish to public-pixel: %v", err)
-	}
+	result.Get(ctx)
 }
 
 func toInt(v interface{}) int {
@@ -305,13 +311,28 @@ func toInt(v interface{}) int {
 }
 
 func handleCloudEvent(ctx context.Context, e event.Event) error {
-	ctx, span := tracer.Start(ctx, "pixel_worker.handle_event")
-	defer span.End()
-
 	var msg MessagePublishedData
 	if err := e.DataAs(&msg); err != nil {
 		return fmt.Errorf("parse event: %w", err)
 	}
+
+	// Extract trace context from Pub/Sub attributes
+	if traceID := msg.Message.Attributes["traceId"]; traceID != "" {
+		if spanID := msg.Message.Attributes["spanId"]; spanID != "" {
+			tid, _ := trace.TraceIDFromHex(traceID)
+			sid, _ := trace.SpanIDFromHex(spanID)
+			parentCtx := trace.NewSpanContext(trace.SpanContextConfig{
+				TraceID:    tid,
+				SpanID:     sid,
+				TraceFlags: trace.FlagsSampled,
+				Remote:     true,
+			})
+			ctx = trace.ContextWithRemoteSpanContext(ctx, parentCtx)
+		}
+	}
+
+	ctx, span := tracer.Start(ctx, "pixel_worker.handle_event")
+	defer span.End()
 
 	var ev PixelEvent
 	if err := json.Unmarshal(msg.Message.Data, &ev); err != nil {
@@ -322,8 +343,6 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 		ev.Source = "web"
 	}
 
-	log.Printf("Pixel: (%d,%d) #%s by %s [%s]", ev.X, ev.Y, ev.Color, ev.Username, ev.Source)
-
 	reply := func(msg string) {
 		if ev.Source == "discord" {
 			sendFollowUp(ev.ApplicationID, ev.InteractionToken, msg)
@@ -332,6 +351,7 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 
 	// Validate color
 	if !hexColorRegex.MatchString(ev.Color) {
+		slog.Warn("pixel_validation_failed", "reason", "invalid_color", "color", ev.Color, "user_id", ev.UserID)
 		reply(fmt.Sprintf("Invalid color format: %s. Use 6-digit hex (e.g., FF0000)", ev.Color))
 		return nil
 	}
@@ -339,6 +359,7 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	// Validate bounds
 	valid, reason := validateBounds(ctx, ev.X, ev.Y)
 	if !valid {
+		slog.Warn("pixel_validation_failed", "reason", reason, "x", ev.X, "y", ev.Y, "user_id", ev.UserID)
 		reply(reason)
 		return nil
 	}
@@ -346,20 +367,29 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	// Rate limit
 	allowed, count := checkRateLimit(ctx, ev.UserID)
 	if !allowed {
+		slog.Warn("rate_limit_exceeded", "user_id", ev.UserID, "count", count, "max", rateLimitMax)
 		reply(fmt.Sprintf("Rate limit exceeded (%d/%d per minute)", count, rateLimitMax))
 		return nil
 	}
 
 	// Update pixel
 	if !updatePixel(ctx, ev.X, ev.Y, ev.Color, ev.UserID, ev.Username, ev.Source) {
+		slog.Error("pixel_placement_failed", "x", ev.X, "y", ev.Y, "user_id", ev.UserID)
 		reply("Failed to place pixel")
 		return nil
 	}
+
+	slog.Info("pixel_placed", "x", ev.X, "y", ev.Y, "color", ev.Color, "user_id", ev.UserID, "source", ev.Source)
 
 	// Publish for real-time web updates
 	publishPixelUpdate(ctx, ev.X, ev.Y, ev.Color, ev.UserID, ev.Username)
 
 	reply(fmt.Sprintf("Pixel placed at (%d, %d) with color #%s", ev.X, ev.Y, ev.Color))
+
+	// Flush traces before function exits (required for serverless)
+	if tracerProvider != nil {
+		tracerProvider.ForceFlush(ctx)
+	}
 
 	return nil
 }

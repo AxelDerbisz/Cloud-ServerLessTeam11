@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -21,7 +21,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	texporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
@@ -56,20 +56,15 @@ func init() {
 
 	if keyHex := strings.TrimSpace(os.Getenv("DISCORD_PUBLIC_KEY")); keyHex != "" {
 		keyBytes, err := hex.DecodeString(keyHex)
-		if err != nil {
-			log.Printf("Failed to decode DISCORD_PUBLIC_KEY: %v", err)
-		} else {
+		if err == nil {
 			discordPublicKey = ed25519.PublicKey(keyBytes)
 		}
 	}
 
-	// Initialize OpenTelemetry with OTLP exporter (same as pixel-worker-go)
+	// Initialize OpenTelemetry with GCP Cloud Trace exporter
 	ctx := context.Background()
-	exporter, err := otlptracegrpc.New(ctx)
-	if err != nil {
-		log.Printf("Failed to create OTLP exporter: %v", err)
-	} else {
-		// Use WithFromEnv to pick up OTEL_SERVICE_NAME from environment
+	exporter, err := texporter.New(texporter.WithProjectID(projectID))
+	if err == nil {
 		res, _ := resource.New(ctx,
 			resource.WithFromEnv(),
 			resource.WithTelemetrySDK(),
@@ -79,20 +74,26 @@ func init() {
 			sdktrace.WithResource(res),
 		)
 		otel.SetTracerProvider(tracerProvider)
-		tracer = tracerProvider.Tracer("discord-proxy")
-		log.Println("OTLP tracing initialized for discord-proxy")
 	}
+	tracer = otel.Tracer("discord-proxy")
+
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.MessageKey {
+				a.Key = "message"
+			} else if a.Key == slog.LevelKey {
+				a.Key = "severity"
+			}
+			return a
+		},
+	})))
 
 	functions.HTTP("handler", Handler)
 }
 
 func getPubsubClient() *pubsub.Client {
 	pubsubOnce.Do(func() {
-		var err error
-		pubsubClient, err = pubsub.NewClient(context.Background(), projectID)
-		if err != nil {
-			log.Printf("Failed to create Pub/Sub client: %v", err)
-		}
+		pubsubClient, _ = pubsub.NewClient(context.Background(), projectID)
 	})
 	return pubsubClient
 }
@@ -136,13 +137,11 @@ type User struct {
 
 func verifySignature(signature, timestamp, body string) bool {
 	if discordPublicKey == nil {
-		log.Println("DISCORD_PUBLIC_KEY not configured")
 		return false
 	}
 
 	sigBytes, err := hex.DecodeString(signature)
 	if err != nil {
-		log.Printf("Failed to decode signature: %v", err)
 		return false
 	}
 
@@ -189,8 +188,6 @@ func publishMessage(ctx context.Context, topicName string, data interface{}, att
 		return err
 	}
 
-	log.Printf("Publishing to %s: %s", topicName, string(payload))
-
 	// Propagate trace context via attributes
 	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
 		attrs["traceId"] = span.SpanContext().TraceID().String()
@@ -208,11 +205,9 @@ func publishMessage(ctx context.Context, topicName string, data interface{}, att
 }
 
 func routeCanvasCommand(ctx context.Context, interaction Interaction) error {
-	if tracer != nil {
-		var span trace.Span
-		ctx, span = tracer.Start(ctx, "routeCanvasCommand")
-		defer span.End()
-	}
+	var span trace.Span
+	ctx, span = tracer.Start(ctx, "routeCanvasCommand")
+	defer span.End()
 
 	messageData := map[string]interface{}{
 		"action":           "status",
@@ -229,11 +224,9 @@ func routeCanvasCommand(ctx context.Context, interaction Interaction) error {
 }
 
 func routeDrawCommand(ctx context.Context, interaction Interaction) error {
-	if tracer != nil {
-		var span trace.Span
-		ctx, span = tracer.Start(ctx, "routeDrawCommand")
-		defer span.End()
-	}
+	var span trace.Span
+	ctx, span = tracer.Start(ctx, "routeDrawCommand")
+	defer span.End()
 
 	options := make(map[string]interface{})
 	for _, opt := range interaction.Data.Options {
@@ -272,11 +265,9 @@ func routeDrawCommand(ctx context.Context, interaction Interaction) error {
 }
 
 func routeSnapshotCommand(ctx context.Context, interaction Interaction) error {
-	if tracer != nil {
-		var span trace.Span
-		ctx, span = tracer.Start(ctx, "routeSnapshotCommand")
-		defer span.End()
-	}
+	var span trace.Span
+	ctx, span = tracer.Start(ctx, "routeSnapshotCommand")
+	defer span.End()
 
 	if !isAdmin(interaction.Member) {
 		return sendFollowUp(interaction.ApplicationID, interaction.Token, "You do not have permission to create snapshots.")
@@ -297,11 +288,9 @@ func routeSnapshotCommand(ctx context.Context, interaction Interaction) error {
 }
 
 func routeSessionCommand(ctx context.Context, interaction Interaction) error {
-	if tracer != nil {
-		var span trace.Span
-		ctx, span = tracer.Start(ctx, "routeSessionCommand")
-		defer span.End()
-	}
+	var span trace.Span
+	ctx, span = tracer.Start(ctx, "routeSessionCommand")
+	defer span.End()
 
 	if !isAdmin(interaction.Member) {
 		return sendFollowUp(interaction.ApplicationID, interaction.Token, "You do not have permission to manage sessions.")
@@ -325,23 +314,17 @@ func routeSessionCommand(ctx context.Context, interaction Interaction) error {
 
 	// Extract optional width and height parameters (for "start" action)
 	if action == "start" && len(interaction.Data.Options) > 1 {
-		log.Printf("Session start - found %d options", len(interaction.Data.Options))
 		for _, option := range interaction.Data.Options[1:] {
-			log.Printf("Option: %s = %v", option.Name, option.Value)
 			if option.Name == "width" {
 				if width, err := toInt(option.Value); err == nil && width >= 10 && width <= 100000 {
 					messageData["canvasWidth"] = width
-					log.Printf("Set canvasWidth to %d", width)
 				}
 			} else if option.Name == "height" {
 				if height, err := toInt(option.Value); err == nil && height >= 10 && height <= 100000 {
 					messageData["canvasHeight"] = height
-					log.Printf("Set canvasHeight to %d", height)
 				}
 			}
 		}
-	} else {
-		log.Printf("Session action=%s, options=%d", action, len(interaction.Data.Options))
 	}
 
 	return publishMessage(ctx, sessionEventsTopic, messageData, map[string]string{
@@ -373,13 +356,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Start parent span for the request
-	if tracer != nil {
-		var span trace.Span
-		ctx, span = tracer.Start(ctx, "discord-webhook")
-		defer span.End()
-	}
-
-	log.Printf("Discord webhook received: method=%s", r.Method)
+	var span trace.Span
+	ctx, span = tracer.Start(ctx, "discord-webhook")
+	defer span.End()
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -388,7 +367,6 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
-		log.Printf("Failed to read body: %v", err)
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
@@ -398,29 +376,23 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	timestamp := r.Header.Get("X-Signature-Timestamp")
 
 	if signature == "" || timestamp == "" {
-		log.Println("Missing signature headers")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
 	if !verifySignature(signature, timestamp, rawBody) {
-		log.Println("Invalid signature")
 		http.Error(w, "Invalid signature", http.StatusUnauthorized)
 		return
 	}
 
-	log.Println("Signature verified successfully")
-
 	var interaction Interaction
 	if err := json.Unmarshal(bodyBytes, &interaction); err != nil {
-		log.Printf("Failed to parse interaction: %v", err)
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
 
 	// Handle Discord ping
 	if interaction.Type == 1 {
-		log.Println("Discord ping received, responding with type 1")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]int{"type": 1})
 		return
@@ -428,14 +400,18 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	// Only handle application commands (type 2)
 	if interaction.Type != 2 {
-		log.Printf("Ignoring non-command interaction type: %d", interaction.Type)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]int{"type": 1})
 		return
 	}
 
 	commandName := interaction.Data.Name
-	log.Printf("Processing command: /%s", commandName)
+
+	slog.Info("command_received",
+		"command", commandName,
+		"user_id", interaction.Member.User.ID,
+		"username", interaction.Member.User.Username,
+	)
 
 	// Add command attributes to span
 	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
@@ -453,7 +429,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	switch commandName {
 	case "draw":
 		if err := routeDrawCommand(ctx, interaction); err != nil {
-			log.Printf("Failed to route draw command: %v", err)
+			slog.Error("command_failed", "command", "draw", "error", err.Error())
 			if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
 				span.RecordError(err)
 				span.SetStatus(codes.Error, err.Error())
@@ -462,7 +438,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	case "canvas":
 		if err := routeCanvasCommand(ctx, interaction); err != nil {
-			log.Printf("Failed to route canvas command: %v", err)
+			slog.Error("command_failed", "command", "canvas", "error", err.Error())
 			if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
 				span.RecordError(err)
 				span.SetStatus(codes.Error, err.Error())
@@ -471,7 +447,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	case "snapshot":
 		if err := routeSnapshotCommand(ctx, interaction); err != nil {
-			log.Printf("Failed to route snapshot command: %v", err)
+			slog.Error("command_failed", "command", "snapshot", "error", err.Error())
 			if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
 				span.RecordError(err)
 				span.SetStatus(codes.Error, err.Error())
@@ -480,21 +456,16 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	case "session":
 		if err := routeSessionCommand(ctx, interaction); err != nil {
-			log.Printf("Failed to route session command: %v", err)
+			slog.Error("command_failed", "command", "session", "error", err.Error())
 			if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
 				span.RecordError(err)
 				span.SetStatus(codes.Error, err.Error())
 			}
 		}
-
-	default:
-		log.Printf("Unknown command: %s", commandName)
 	}
 
 	// Flush traces before function exits (required for serverless)
 	if tracerProvider != nil {
-		if err := tracerProvider.ForceFlush(ctx); err != nil {
-			log.Printf("Failed to flush traces: %v", err)
-		}
+		tracerProvider.ForceFlush(ctx)
 	}
 }

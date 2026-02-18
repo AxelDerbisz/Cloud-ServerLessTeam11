@@ -9,27 +9,24 @@
  */
 
 // Initialize tracing before other imports
-const { NodeTracerProvider, BatchSpanProcessor } = require('@opentelemetry/sdk-trace-node');
-const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-grpc');
+const { NodeTracerProvider } = require('@opentelemetry/sdk-trace-node');
+const { SimpleSpanProcessor } = require('@opentelemetry/sdk-trace-base');
+const { TraceExporter } = require('@google-cloud/opentelemetry-cloud-trace-exporter');
 const { Resource } = require('@opentelemetry/resources');
 const { ATTR_SERVICE_NAME } = require('@opentelemetry/semantic-conventions');
 const { trace, SpanStatusCode, context } = require('@opentelemetry/api');
 
-// Use OTEL_SERVICE_NAME from environment, fallback to default
-const serviceName = process.env.OTEL_SERVICE_NAME || 'session-worker';
-
-const provider = new NodeTracerProvider({
-  resource: new Resource({
-    [ATTR_SERVICE_NAME]: serviceName,
-  }),
+const tracerProvider = new NodeTracerProvider({
+  resource: new Resource({ [ATTR_SERVICE_NAME]: 'session-worker' }),
 });
-
-// Use OTLP exporter (reads OTEL_EXPORTER_OTLP_ENDPOINT from env)
-const exporter = new OTLPTraceExporter();
-provider.addSpanProcessor(new BatchSpanProcessor(exporter));
-provider.register();
+tracerProvider.addSpanProcessor(new SimpleSpanProcessor(new TraceExporter({ projectId: process.env.PROJECT_ID })));
+tracerProvider.register();
 
 const tracer = trace.getTracer('session-worker');
+
+function logJson(severity, message, fields = {}) {
+  console.log(JSON.stringify({ severity, message, ...fields }));
+}
 
 const functions = require('@google-cloud/functions-framework');
 const { Firestore } = require('@google-cloud/firestore');
@@ -41,14 +38,11 @@ const firestore = new Firestore({ projectId: PROJECT_ID, databaseId: 'team11-dat
 
 const DISCORD_API_ENDPOINT = 'https://discord.com/api/v10';
 
-console.log(`OTLP tracing initialized for ${serviceName}`);
-
 /**
  * Send follow-up message to Discord
  */
 async function sendDiscordFollowUp(applicationId, token, content) {
   if (!applicationId || !token || !DISCORD_BOT_TOKEN) {
-    console.log('Discord follow-up skipped: missing credentials');
     return false;
   }
 
@@ -70,7 +64,6 @@ async function sendDiscordFollowUp(applicationId, token, content) {
     }
     return true;
   } catch (error) {
-    console.error('Failed to send Discord follow-up:', error);
     return false;
   }
 }
@@ -94,10 +87,8 @@ async function startSession(metadata) {
       createdByUsername: metadata.username
     });
 
-    console.log(`Session started with dimensions: ${canvasWidth}x${canvasHeight}`);
     return { success: true, message: `✅ Session started successfully (${canvasWidth}x${canvasHeight})` };
   } catch (error) {
-    console.error('Failed to start session:', error);
     return { success: false, message: `❌ Failed to start session: ${error.message}` };
   }
 }
@@ -114,10 +105,8 @@ async function pauseSession() {
       pausedAt: new Date().toISOString()
     });
 
-    console.log('Session paused');
     return { success: true, message: '⏸️ Session paused' };
   } catch (error) {
-    console.error('Failed to pause session:', error);
     return { success: false, message: `❌ Failed to pause session: ${error.message}` };
   }
 }
@@ -134,10 +123,8 @@ async function resumeSession() {
       resumedAt: new Date().toISOString()
     });
 
-    console.log('Session resumed');
     return { success: true, message: '▶️ Session resumed' };
   } catch (error) {
-    console.error('Failed to resume session:', error);
     return { success: false, message: `❌ Failed to resume session: ${error.message}` };
   }
 }
@@ -147,8 +134,6 @@ async function resumeSession() {
  */
 async function resetCanvas() {
   try {
-    console.log('Resetting canvas - deleting all pixels');
-
     // Delete all pixels in batches
     const batchSize = 500;
     const pixelsRef = firestore.collection('pixels');
@@ -169,8 +154,6 @@ async function resetCanvas() {
 
       await batch.commit();
       deletedCount += snapshot.size;
-
-      console.log(`Deleted ${deletedCount} pixels so far...`);
     }
 
     // Update session
@@ -181,10 +164,8 @@ async function resetCanvas() {
       pixelsCleared: deletedCount
     });
 
-    console.log(`Canvas reset complete. Deleted ${deletedCount} pixels`);
     return { success: true, message: `🔄 Canvas reset complete. Deleted ${deletedCount} pixels` };
   } catch (error) {
-    console.error('Failed to reset canvas:', error);
     return { success: false, message: `❌ Failed to reset canvas: ${error.message}` };
   }
 }
@@ -211,10 +192,8 @@ async function endSession() {
       await sessionRef.delete();
     }
 
-    console.log('Session ended');
     return { success: true, message: '🛑 Session ended and archived' };
   } catch (error) {
-    console.error('Failed to end session:', error);
     return { success: false, message: `❌ Failed to end session: ${error.message}` };
   }
 }
@@ -246,7 +225,6 @@ async function getCanvasStatus() {
       message: `**Canvas Status**\nStatus: ${status}\nStarted: ${startedAt}\nSize: ${canvasWidth} x ${canvasHeight}\nTotal Pixels: ${pixelCount}`
     };
   } catch (error) {
-    console.error('Failed to get canvas status:', error);
     return { success: false, message: `❌ Failed to get canvas status: ${error.message}` };
   }
 }
@@ -255,8 +233,6 @@ async function getCanvasStatus() {
  * CloudEvent function handler (Pub/Sub)
  */
 functions.cloudEvent('handler', async (cloudEvent) => {
-  console.log('Session command received');
-
   // Extract trace context from Pub/Sub message attributes
   const attributes = cloudEvent.data.message.attributes || {};
   let parentContext = context.active();
@@ -281,8 +257,6 @@ functions.cloudEvent('handler', async (cloudEvent) => {
 
     const { action, userId, username, interactionToken, applicationId, canvasWidth, canvasHeight } = messageData;
 
-    console.log(`Processing session action: ${action} by ${username}`);
-
     // Add span attributes
     span.setAttributes({
       'session.action': action,
@@ -291,6 +265,8 @@ functions.cloudEvent('handler', async (cloudEvent) => {
     });
 
     let result;
+
+    logJson('INFO', 'session_command_received', { action, user_id: userId, username });
 
     switch (action) {
       case 'start':
@@ -326,7 +302,6 @@ functions.cloudEvent('handler', async (cloudEvent) => {
         break;
 
       default:
-        console.error('Unknown session action:', action);
         result = { success: false, message: `❌ Unknown action: ${action}` };
         span.setStatus({ code: SpanStatusCode.ERROR, message: `Unknown action: ${action}` });
     }
@@ -337,15 +312,14 @@ functions.cloudEvent('handler', async (cloudEvent) => {
     }
 
     if (result.success) {
-      console.log(`Session action '${action}' completed successfully`);
+      logJson('INFO', 'session_command_success', { action, user_id: userId });
       span.setStatus({ code: SpanStatusCode.OK });
     } else {
-      console.error(`Session action '${action}' failed`);
+      logJson('ERROR', 'session_command_failed', { action, user_id: userId, error: result.message });
       span.setStatus({ code: SpanStatusCode.ERROR, message: result.message });
       throw new Error(result.message);
     }
   } catch (error) {
-    console.error('Error processing session command:', error);
     span.recordException(error);
     span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
     throw error; // Trigger retry
@@ -353,9 +327,8 @@ functions.cloudEvent('handler', async (cloudEvent) => {
     span.end();
     // Flush traces before function exits (required for serverless)
     try {
-      await provider.forceFlush();
+      await tracerProvider.forceFlush();
     } catch (flushError) {
-      console.error('Failed to flush traces:', flushError);
     }
   }
 });

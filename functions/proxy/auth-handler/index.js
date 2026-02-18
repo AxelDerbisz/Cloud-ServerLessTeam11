@@ -8,29 +8,24 @@
  */
 
 // Initialize tracing before other imports
-const { NodeTracerProvider, BatchSpanProcessor } = require('@opentelemetry/sdk-trace-node');
-const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-grpc');
+const { NodeTracerProvider } = require('@opentelemetry/sdk-trace-node');
+const { SimpleSpanProcessor } = require('@opentelemetry/sdk-trace-base');
+const { TraceExporter } = require('@google-cloud/opentelemetry-cloud-trace-exporter');
 const { Resource } = require('@opentelemetry/resources');
 const { ATTR_SERVICE_NAME } = require('@opentelemetry/semantic-conventions');
 const { trace, SpanStatusCode } = require('@opentelemetry/api');
 
-// Use OTEL_SERVICE_NAME from environment, fallback to default
-const serviceName = process.env.OTEL_SERVICE_NAME || 'auth-handler';
-
-const provider = new NodeTracerProvider({
-  resource: new Resource({
-    [ATTR_SERVICE_NAME]: serviceName,
-  }),
+const tracerProvider = new NodeTracerProvider({
+  resource: new Resource({ [ATTR_SERVICE_NAME]: 'auth-handler' }),
 });
-
-// Use OTLP exporter (reads OTEL_EXPORTER_OTLP_ENDPOINT from env)
-const exporter = new OTLPTraceExporter();
-provider.addSpanProcessor(new BatchSpanProcessor(exporter));
-provider.register();
+tracerProvider.addSpanProcessor(new SimpleSpanProcessor(new TraceExporter({ projectId: process.env.PROJECT_ID })));
+tracerProvider.register();
 
 const tracer = trace.getTracer('auth-handler');
 
-console.log(`OTLP tracing initialized for ${serviceName}`);
+function logJson(severity, message, fields = {}) {
+  console.log(JSON.stringify({ severity, message, ...fields }));
+}
 
 const functions = require('@google-cloud/functions-framework');
 const { Firestore, FieldValue } = require('@google-cloud/firestore');
@@ -61,6 +56,8 @@ function handleLogin(req, res) {
   const state = crypto.randomBytes(16).toString('hex');
   const redirectUri = getRedirectUri(req);
 
+  logJson('INFO', 'auth_login_redirect', { redirect_uri: redirectUri });
+
   const params = new URLSearchParams({
     client_id: DISCORD_CLIENT_ID,
     redirect_uri: redirectUri,
@@ -79,7 +76,7 @@ function handleLogin(req, res) {
  * Handle GET /auth/callback - OAuth2 callback
  */
 async function handleCallback(req, res) {
-  const { code, state } = req.query;
+  const { code } = req.query;
 
   if (!code) {
     return res.status(400).json({ error: 'Missing authorization code' });
@@ -146,6 +143,7 @@ async function handleCallback(req, res) {
 
     // Return JWT to client
     // In production, you'd redirect to frontend with token
+    logJson('INFO', 'auth_callback_success', { user_id: userData.id, username: userData.username });
     res.status(200).json({
       token: jwtToken,
       user: {
@@ -156,7 +154,7 @@ async function handleCallback(req, res) {
       }
     });
   } catch (error) {
-    console.error('OAuth2 callback error:', error);
+    logJson('ERROR', 'auth_callback_failed', { error: error.message });
     res.status(500).json({ error: 'Authentication failed' });
   }
 }
@@ -193,7 +191,7 @@ async function handleMe(req, res) {
       lastPixelAt: userData.lastPixelAt || null
     });
   } catch (error) {
-    console.error('Token verification error:', error);
+    logJson('WARNING', 'auth_me_invalid_token');
     res.status(401).json({ error: 'Invalid token' });
   }
 }
@@ -253,7 +251,6 @@ functions.http('handler', async (req, res) => {
     span.setStatus({ code: SpanStatusCode.ERROR, message: 'Not found' });
     res.status(404).json({ error: 'Not found' });
   } catch (error) {
-    console.error('Auth handler error:', error);
     span.recordException(error);
     span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
     res.status(500).json({ error: 'Internal server error' });
@@ -261,9 +258,9 @@ functions.http('handler', async (req, res) => {
     span.end();
     // Flush traces before function exits (required for serverless)
     try {
-      await provider.forceFlush();
+      await tracerProvider.forceFlush();
     } catch (flushError) {
-      console.error('Failed to flush traces:', flushError);
+      // flush failed silently
     }
   }
 });

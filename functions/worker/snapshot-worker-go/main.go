@@ -10,6 +10,7 @@ import (
 	"image/draw"
 	"image/png"
 	"log"
+	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -24,7 +25,7 @@ import (
 	"github.com/cloudevents/sdk-go/v2/event"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	texporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
@@ -53,13 +54,10 @@ func init() {
 	snapshotsBucket = os.Getenv("SNAPSHOTS_BUCKET")
 	discordBotToken = strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
 
-	// Initialize OpenTelemetry with OTLP exporter
+	// Initialize OpenTelemetry with GCP Cloud Trace exporter
 	ctx := context.Background()
-	exporter, err := otlptracegrpc.New(ctx)
-	if err != nil {
-		log.Printf("Failed to create OTLP exporter: %v", err)
-	} else {
-		// Use WithFromEnv to pick up OTEL_SERVICE_NAME from environment
+	exporter, err := texporter.New(texporter.WithProjectID(projectID))
+	if err == nil {
 		res, _ := resource.New(ctx,
 			resource.WithFromEnv(),
 			resource.WithTelemetrySDK(),
@@ -69,9 +67,19 @@ func init() {
 			sdktrace.WithResource(res),
 		)
 		otel.SetTracerProvider(tracerProvider)
-		tracer = tracerProvider.Tracer("snapshot-worker")
-		log.Println("OTLP tracing initialized for snapshot-worker")
 	}
+	tracer = otel.Tracer("snapshot-worker")
+
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.MessageKey {
+				a.Key = "message"
+			} else if a.Key == slog.LevelKey {
+				a.Key = "severity"
+			}
+			return a
+		},
+	})))
 
 	functions.CloudEvent("handler", handleCloudEvent)
 }
@@ -226,7 +234,14 @@ func upload(ctx context.Context, data []byte, path, contentType string) (string,
 	if err := w.Close(); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("https://storage.googleapis.com/%s/%s", snapshotsBucket, path), nil
+	signedURL, err := getStorage().Bucket(snapshotsBucket).SignedURL(path, &storage.SignedURLOptions{
+		Method:  "GET",
+		Expires: time.Now().Add(7 * 24 * time.Hour),
+	})
+	if err != nil {
+		return fmt.Sprintf("https://storage.googleapis.com/%s/%s", snapshotsBucket, path), nil
+	}
+	return signedURL, nil
 }
 
 func toIntVal(v interface{}) int {
@@ -258,7 +273,6 @@ func postToDiscord(channelID, thumbnailURL string, m Manifest) {
 	req.Header.Set("Authorization", "Bot "+discordBotToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("Discord post failed: %v", err)
 		return
 	}
 	resp.Body.Close()
@@ -274,7 +288,6 @@ func sendFollowUp(appID, token, content string) {
 	req.Header.Set("Authorization", "Bot "+discordBotToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("Discord follow-up failed: %v", err)
 		return
 	}
 	resp.Body.Close()
@@ -282,35 +295,29 @@ func sendFollowUp(appID, token, content string) {
 
 func handleCloudEvent(ctx context.Context, e event.Event) error {
 	start := time.Now()
-	log.Println("Snapshot request received")
 
 	var msg MessagePublishedData
 	if err := e.DataAs(&msg); err != nil {
 		return fmt.Errorf("parse event: %w", err)
 	}
 
-	// Extract trace context from Pub/Sub attributes and create linked span
-	if tracer != nil {
-		var span trace.Span
-		if traceID := msg.Message.Attributes["traceId"]; traceID != "" {
-			if spanID := msg.Message.Attributes["spanId"]; spanID != "" {
-				// Parse trace and span IDs
-				tid, _ := trace.TraceIDFromHex(traceID)
-				sid, _ := trace.SpanIDFromHex(spanID)
-				
-				// Create remote span context as parent
-				parentCtx := trace.NewSpanContext(trace.SpanContextConfig{
-					TraceID:    tid,
-					SpanID:     sid,
-					TraceFlags: trace.FlagsSampled,
-					Remote:     true,
-				})
-				ctx = trace.ContextWithRemoteSpanContext(ctx, parentCtx)
-			}
+	// Extract trace context from Pub/Sub attributes
+	if traceID := msg.Message.Attributes["traceId"]; traceID != "" {
+		if spanID := msg.Message.Attributes["spanId"]; spanID != "" {
+			tid, _ := trace.TraceIDFromHex(traceID)
+			sid, _ := trace.SpanIDFromHex(spanID)
+			parentCtx := trace.NewSpanContext(trace.SpanContextConfig{
+				TraceID:    tid,
+				SpanID:     sid,
+				TraceFlags: trace.FlagsSampled,
+				Remote:     true,
+			})
+			ctx = trace.ContextWithRemoteSpanContext(ctx, parentCtx)
 		}
-		ctx, span = tracer.Start(ctx, "generateSnapshot")
-		defer span.End()
 	}
+
+	ctx, span := tracer.Start(ctx, "generateSnapshot")
+	defer span.End()
 
 	var req SnapshotRequest
 	if err := json.Unmarshal(msg.Message.Data, &req); err != nil {
@@ -328,7 +335,6 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 			canvasH = h
 		}
 	}
-	log.Printf("Canvas: %dx%d", canvasW, canvasH)
 
 	// Add span attributes
 	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
@@ -342,10 +348,10 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	// Get all pixels
 	pixels, err := getAllPixels(ctx)
 	if err != nil {
+		slog.Error("snapshot_pixels_fetch_failed", "error", err.Error(), "user_id", req.UserID)
 		sendFollowUp(req.ApplicationID, req.InteractionToken, fmt.Sprintf("Failed to get pixels: %v", err))
 		return err
 	}
-	log.Printf("Pixels: %d (read in %v)", len(pixels), time.Since(start))
 
 	timestamp := time.Now().UnixMilli()
 	snapshotDir := fmt.Sprintf("snapshots/%d", timestamp)
@@ -360,7 +366,6 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 			tilePixelMap[tk] = append(tilePixelMap[tk], p)
 		}
 	}
-	log.Printf("Sparse tiles: %d / %d total (%dx%d grid)", len(tilePixelMap), tilesX*tilesY, tilesX, tilesY)
 
 	// Generate + upload tiles in parallel using goroutine pool
 	maxWorkers := runtime.NumCPU() * 2
@@ -387,7 +392,6 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 			path := fmt.Sprintf("%s/tile-%d-%d.png", snapshotDir, tk.x, tk.y)
 			url, err := upload(ctx, data, path, "image/png")
 			if err != nil {
-				log.Printf("Tile %d-%d upload failed: %v", tk.x, tk.y, err)
 				return
 			}
 
@@ -398,7 +402,6 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	}
 
 	var thumbURL string
-	var thumbErr error
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -406,15 +409,10 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 		defer func() { <-sem }()
 
 		thumbData := generateThumbnail(pixels, canvasW, canvasH)
-		thumbURL, thumbErr = upload(ctx, thumbData, snapshotDir+"/thumbnail.png", "image/png")
+		thumbURL, _ = upload(ctx, thumbData, snapshotDir+"/thumbnail.png", "image/png")
 	}()
 
 	wg.Wait()
-	log.Printf("Tiles generated + uploaded: %d in %v", len(results), time.Since(start))
-
-	if thumbErr != nil {
-		log.Printf("Thumbnail failed: %v", thumbErr)
-	}
 
 	// Create manifest
 	manifest := Manifest{
@@ -431,12 +429,17 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 
 	manifestJSON, _ := json.MarshalIndent(manifest, "", "  ")
 	manifestURL, err := upload(ctx, manifestJSON, snapshotDir+"/manifest.json", "application/json")
-	if err != nil {
-		log.Printf("Manifest upload failed: %v", err)
-	}
 
 	elapsed := time.Since(start)
-	log.Printf("Snapshot complete: %d sparse tiles, %d pixels in %v", len(results), len(pixels), elapsed)
+
+	slog.Info("snapshot_generated",
+		"pixel_count", len(pixels),
+		"tile_count", len(results),
+		"duration_seconds", elapsed.Seconds(),
+		"canvas_width", canvasW,
+		"canvas_height", canvasH,
+		"user_id", req.UserID,
+	)
 
 	// Add final span attributes
 	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
@@ -461,9 +464,7 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 
 	// Flush traces before function exits (required for serverless)
 	if tracerProvider != nil {
-		if err := tracerProvider.ForceFlush(ctx); err != nil {
-			log.Printf("Failed to flush traces: %v", err)
-		}
+		tracerProvider.ForceFlush(ctx)
 	}
 
 	return nil
