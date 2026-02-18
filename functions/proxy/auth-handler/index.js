@@ -8,29 +8,17 @@
  */
 
 // Initialize tracing before other imports
-const { NodeTracerProvider, BatchSpanProcessor } = require('@opentelemetry/sdk-trace-node');
+const { NodeSDK } = require('@opentelemetry/sdk-node');
 const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-grpc');
-const { Resource } = require('@opentelemetry/resources');
-const { ATTR_SERVICE_NAME } = require('@opentelemetry/semantic-conventions');
 const { trace, SpanStatusCode } = require('@opentelemetry/api');
 
-// Use OTEL_SERVICE_NAME from environment, fallback to default
-const serviceName = process.env.OTEL_SERVICE_NAME || 'auth-handler';
-
-const provider = new NodeTracerProvider({
-  resource: new Resource({
-    [ATTR_SERVICE_NAME]: serviceName,
-  }),
+// NodeSDK automatically reads OTEL_SERVICE_NAME and OTEL_EXPORTER_OTLP_ENDPOINT from environment
+const sdk = new NodeSDK({
+  traceExporter: new OTLPTraceExporter(),
 });
-
-// Use OTLP exporter (reads OTEL_EXPORTER_OTLP_ENDPOINT from env)
-const exporter = new OTLPTraceExporter();
-provider.addSpanProcessor(new BatchSpanProcessor(exporter));
-provider.register();
+sdk.start();
 
 const tracer = trace.getTracer('auth-handler');
-
-console.log(`OTLP tracing initialized for ${serviceName}`);
 
 const functions = require('@google-cloud/functions-framework');
 const { Firestore } = require('@google-cloud/firestore');
@@ -158,7 +146,6 @@ async function handleCallback(req, res) {
       }
     });
   } catch (error) {
-    console.error('OAuth2 callback error:', error);
     res.status(500).json({ error: 'Authentication failed' });
   }
 }
@@ -195,7 +182,6 @@ async function handleMe(req, res) {
       lastPixelAt: userData.lastPixelAt || null
     });
   } catch (error) {
-    console.error('Token verification error:', error);
     res.status(401).json({ error: 'Invalid token' });
   }
 }
@@ -255,7 +241,6 @@ functions.http('handler', async (req, res) => {
     span.setStatus({ code: SpanStatusCode.ERROR, message: 'Not found' });
     res.status(404).json({ error: 'Not found' });
   } catch (error) {
-    console.error('Auth handler error:', error);
     span.recordException(error);
     span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
     res.status(500).json({ error: 'Internal server error' });
@@ -263,9 +248,12 @@ functions.http('handler', async (req, res) => {
     span.end();
     // Flush traces before function exits (required for serverless)
     try {
-      await provider.forceFlush();
+      const provider = trace.getTracerProvider();
+      if (provider.forceFlush) {
+        await provider.forceFlush();
+      }
     } catch (flushError) {
-      console.error('Failed to flush traces:', flushError);
+      // flush failed silently
     }
   }
 });

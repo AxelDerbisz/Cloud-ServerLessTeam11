@@ -56,9 +56,7 @@ func init() {
 	// Initialize OpenTelemetry with OTLP exporter
 	ctx := context.Background()
 	exporter, err := otlptracegrpc.New(ctx)
-	if err != nil {
-		log.Printf("Failed to create OTLP exporter: %v", err)
-	} else {
+	if err == nil {
 		// Use WithFromEnv to pick up OTEL_SERVICE_NAME from environment
 		res, _ := resource.New(ctx,
 			resource.WithFromEnv(),
@@ -70,7 +68,6 @@ func init() {
 		)
 		otel.SetTracerProvider(tracerProvider)
 		tracer = tracerProvider.Tracer("snapshot-worker")
-		log.Println("OTLP tracing initialized for snapshot-worker")
 	}
 
 	functions.CloudEvent("handler", handleCloudEvent)
@@ -258,7 +255,6 @@ func postToDiscord(channelID, thumbnailURL string, m Manifest) {
 	req.Header.Set("Authorization", "Bot "+discordBotToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("Discord post failed: %v", err)
 		return
 	}
 	resp.Body.Close()
@@ -274,7 +270,6 @@ func sendFollowUp(appID, token, content string) {
 	req.Header.Set("Authorization", "Bot "+discordBotToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("Discord follow-up failed: %v", err)
 		return
 	}
 	resp.Body.Close()
@@ -282,7 +277,6 @@ func sendFollowUp(appID, token, content string) {
 
 func handleCloudEvent(ctx context.Context, e event.Event) error {
 	start := time.Now()
-	log.Println("Snapshot request received")
 
 	var msg MessagePublishedData
 	if err := e.DataAs(&msg); err != nil {
@@ -328,7 +322,6 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 			canvasH = h
 		}
 	}
-	log.Printf("Canvas: %dx%d", canvasW, canvasH)
 
 	// Add span attributes
 	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
@@ -345,7 +338,6 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 		sendFollowUp(req.ApplicationID, req.InteractionToken, fmt.Sprintf("Failed to get pixels: %v", err))
 		return err
 	}
-	log.Printf("Pixels: %d (read in %v)", len(pixels), time.Since(start))
 
 	timestamp := time.Now().UnixMilli()
 	snapshotDir := fmt.Sprintf("snapshots/%d", timestamp)
@@ -360,7 +352,6 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 			tilePixelMap[tk] = append(tilePixelMap[tk], p)
 		}
 	}
-	log.Printf("Sparse tiles: %d / %d total (%dx%d grid)", len(tilePixelMap), tilesX*tilesY, tilesX, tilesY)
 
 	// Generate + upload tiles in parallel using goroutine pool
 	maxWorkers := runtime.NumCPU() * 2
@@ -387,7 +378,6 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 			path := fmt.Sprintf("%s/tile-%d-%d.png", snapshotDir, tk.x, tk.y)
 			url, err := upload(ctx, data, path, "image/png")
 			if err != nil {
-				log.Printf("Tile %d-%d upload failed: %v", tk.x, tk.y, err)
 				return
 			}
 
@@ -398,7 +388,6 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	}
 
 	var thumbURL string
-	var thumbErr error
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -406,15 +395,10 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 		defer func() { <-sem }()
 
 		thumbData := generateThumbnail(pixels, canvasW, canvasH)
-		thumbURL, thumbErr = upload(ctx, thumbData, snapshotDir+"/thumbnail.png", "image/png")
+		thumbURL, _ = upload(ctx, thumbData, snapshotDir+"/thumbnail.png", "image/png")
 	}()
 
 	wg.Wait()
-	log.Printf("Tiles generated + uploaded: %d in %v", len(results), time.Since(start))
-
-	if thumbErr != nil {
-		log.Printf("Thumbnail failed: %v", thumbErr)
-	}
 
 	// Create manifest
 	manifest := Manifest{
@@ -431,12 +415,8 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 
 	manifestJSON, _ := json.MarshalIndent(manifest, "", "  ")
 	manifestURL, err := upload(ctx, manifestJSON, snapshotDir+"/manifest.json", "application/json")
-	if err != nil {
-		log.Printf("Manifest upload failed: %v", err)
-	}
 
 	elapsed := time.Since(start)
-	log.Printf("Snapshot complete: %d sparse tiles, %d pixels in %v", len(results), len(pixels), elapsed)
 
 	// Add final span attributes
 	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
@@ -461,9 +441,7 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 
 	// Flush traces before function exits (required for serverless)
 	if tracerProvider != nil {
-		if err := tracerProvider.ForceFlush(ctx); err != nil {
-			log.Printf("Failed to flush traces: %v", err)
-		}
+		tracerProvider.ForceFlush(ctx)
 	}
 
 	return nil
