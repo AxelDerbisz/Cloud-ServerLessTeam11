@@ -20,7 +20,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	texporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
@@ -60,9 +60,9 @@ func init() {
 		}
 	}
 
-	// Initialize OpenTelemetry with OTLP exporter
+	// Initialize OpenTelemetry with GCP Cloud Trace exporter
 	ctx := context.Background()
-	exporter, err := otlptracegrpc.New(ctx)
+	exporter, err := texporter.New(texporter.WithProjectID(projectID))
 	if err == nil {
 		res, _ := resource.New(ctx,
 			resource.WithFromEnv(),

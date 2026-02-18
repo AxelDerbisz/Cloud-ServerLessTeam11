@@ -24,7 +24,7 @@ import (
 	"github.com/cloudevents/sdk-go/v2/event"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	texporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
@@ -53,11 +53,10 @@ func init() {
 	snapshotsBucket = os.Getenv("SNAPSHOTS_BUCKET")
 	discordBotToken = strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
 
-	// Initialize OpenTelemetry with OTLP exporter
+	// Initialize OpenTelemetry with GCP Cloud Trace exporter
 	ctx := context.Background()
-	exporter, err := otlptracegrpc.New(ctx)
+	exporter, err := texporter.New(texporter.WithProjectID(projectID))
 	if err == nil {
-		// Use WithFromEnv to pick up OTEL_SERVICE_NAME from environment
 		res, _ := resource.New(ctx,
 			resource.WithFromEnv(),
 			resource.WithTelemetrySDK(),
@@ -67,8 +66,8 @@ func init() {
 			sdktrace.WithResource(res),
 		)
 		otel.SetTracerProvider(tracerProvider)
-		tracer = tracerProvider.Tracer("snapshot-worker")
 	}
+	tracer = otel.Tracer("snapshot-worker")
 
 	functions.CloudEvent("handler", handleCloudEvent)
 }
@@ -283,28 +282,23 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 		return fmt.Errorf("parse event: %w", err)
 	}
 
-	// Extract trace context from Pub/Sub attributes and create linked span
-	if tracer != nil {
-		var span trace.Span
-		if traceID := msg.Message.Attributes["traceId"]; traceID != "" {
-			if spanID := msg.Message.Attributes["spanId"]; spanID != "" {
-				// Parse trace and span IDs
-				tid, _ := trace.TraceIDFromHex(traceID)
-				sid, _ := trace.SpanIDFromHex(spanID)
-				
-				// Create remote span context as parent
-				parentCtx := trace.NewSpanContext(trace.SpanContextConfig{
-					TraceID:    tid,
-					SpanID:     sid,
-					TraceFlags: trace.FlagsSampled,
-					Remote:     true,
-				})
-				ctx = trace.ContextWithRemoteSpanContext(ctx, parentCtx)
-			}
+	// Extract trace context from Pub/Sub attributes
+	if traceID := msg.Message.Attributes["traceId"]; traceID != "" {
+		if spanID := msg.Message.Attributes["spanId"]; spanID != "" {
+			tid, _ := trace.TraceIDFromHex(traceID)
+			sid, _ := trace.SpanIDFromHex(spanID)
+			parentCtx := trace.NewSpanContext(trace.SpanContextConfig{
+				TraceID:    tid,
+				SpanID:     sid,
+				TraceFlags: trace.FlagsSampled,
+				Remote:     true,
+			})
+			ctx = trace.ContextWithRemoteSpanContext(ctx, parentCtx)
 		}
-		ctx, span = tracer.Start(ctx, "generateSnapshot")
-		defer span.End()
 	}
+
+	ctx, span := tracer.Start(ctx, "generateSnapshot")
+	defer span.End()
 
 	var req SnapshotRequest
 	if err := json.Unmarshal(msg.Message.Data, &req); err != nil {

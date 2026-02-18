@@ -145,7 +145,6 @@ module "discord_proxy" {
     SESSION_EVENTS_TOPIC         = module.pubsub.session_events_topic
     ADMIN_ROLE_IDS               = var.admin_role_ids
     OTEL_SERVICE_NAME            = "discord-proxy"
-    OTEL_EXPORTER_OTLP_ENDPOINT  = "https://telemetry.googleapis.com"
   }
 
   secret_environment_variables = [
@@ -190,8 +189,8 @@ module "auth_handler" {
     PROJECT_ID                   = var.project_id
     DISCORD_CLIENT_ID            = var.discord_client_id
     REDIRECT_URI                 = "https://pixel-canvas-gateway-86fcxr1p.ew.gateway.dev/auth/callback"
+    FRONTEND_URL                 = "https://team11-dev.ew.r.appspot.com"
     OTEL_SERVICE_NAME            = "auth-handler"
-    OTEL_EXPORTER_OTLP_ENDPOINT  = "https://telemetry.googleapis.com"
   }
 
   secret_environment_variables = [
@@ -236,7 +235,6 @@ module "pixel_worker" {
     PROJECT_ID                   = var.project_id
     PUBLIC_PIXEL_TOPIC           = module.pubsub.public_pixel_topic
     OTEL_SERVICE_NAME            = "pixel-worker"
-    OTEL_EXPORTER_OTLP_ENDPOINT  = "https://telemetry.googleapis.com"
   }
 
   secret_environment_variables = [
@@ -276,7 +274,6 @@ module "snapshot_worker" {
     PROJECT_ID                   = var.project_id
     SNAPSHOTS_BUCKET             = module.storage.canvas_snapshots_bucket
     OTEL_SERVICE_NAME            = "snapshot-worker"
-    OTEL_EXPORTER_OTLP_ENDPOINT  = "https://telemetry.googleapis.com"
   }
 
   secret_environment_variables = [
@@ -314,7 +311,6 @@ module "session_worker" {
   environment_variables = {
     PROJECT_ID                   = var.project_id
     OTEL_SERVICE_NAME            = "session-worker"
-    OTEL_EXPORTER_OTLP_ENDPOINT  = "https://telemetry.googleapis.com"
   }
 
   secret_environment_variables = [

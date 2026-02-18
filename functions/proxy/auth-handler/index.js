@@ -8,15 +8,14 @@
  */
 
 // Initialize tracing before other imports
-const { NodeSDK } = require('@opentelemetry/sdk-node');
-const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-grpc');
+const { NodeTracerProvider } = require('@opentelemetry/sdk-trace-node');
+const { SimpleSpanProcessor } = require('@opentelemetry/sdk-trace-base');
+const { TraceExporter } = require('@google-cloud/opentelemetry-cloud-trace-exporter');
 const { trace, SpanStatusCode } = require('@opentelemetry/api');
 
-// NodeSDK automatically reads OTEL_SERVICE_NAME and OTEL_EXPORTER_OTLP_ENDPOINT from environment
-const sdk = new NodeSDK({
-  traceExporter: new OTLPTraceExporter(),
-});
-sdk.start();
+const tracerProvider = new NodeTracerProvider();
+tracerProvider.addSpanProcessor(new SimpleSpanProcessor(new TraceExporter({ projectId: process.env.PROJECT_ID })));
+tracerProvider.register();
 
 const tracer = trace.getTracer('auth-handler');
 
@@ -246,10 +245,7 @@ functions.http('handler', async (req, res) => {
     span.end();
     // Flush traces before function exits (required for serverless)
     try {
-      const provider = trace.getTracerProvider();
-      if (provider.forceFlush) {
-        await provider.forceFlush();
-      }
+      await tracerProvider.forceFlush();
     } catch (flushError) {
       // flush failed silently
     }
