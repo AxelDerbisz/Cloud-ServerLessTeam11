@@ -10,6 +10,7 @@ import (
 	"image/draw"
 	"image/png"
 	"log"
+	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -68,6 +69,8 @@ func init() {
 		otel.SetTracerProvider(tracerProvider)
 	}
 	tracer = otel.Tracer("snapshot-worker")
+
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
 	functions.CloudEvent("handler", handleCloudEvent)
 }
@@ -222,7 +225,14 @@ func upload(ctx context.Context, data []byte, path, contentType string) (string,
 	if err := w.Close(); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("https://storage.googleapis.com/%s/%s", snapshotsBucket, path), nil
+	signedURL, err := getStorage().Bucket(snapshotsBucket).SignedURL(path, &storage.SignedURLOptions{
+		Method:  "GET",
+		Expires: time.Now().Add(7 * 24 * time.Hour),
+	})
+	if err != nil {
+		return fmt.Sprintf("https://storage.googleapis.com/%s/%s", snapshotsBucket, path), nil
+	}
+	return signedURL, nil
 }
 
 func toIntVal(v interface{}) int {
@@ -329,6 +339,7 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	// Get all pixels
 	pixels, err := getAllPixels(ctx)
 	if err != nil {
+		slog.Error("snapshot_pixels_fetch_failed", "error", err.Error(), "user_id", req.UserID)
 		sendFollowUp(req.ApplicationID, req.InteractionToken, fmt.Sprintf("Failed to get pixels: %v", err))
 		return err
 	}
@@ -411,6 +422,15 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	manifestURL, err := upload(ctx, manifestJSON, snapshotDir+"/manifest.json", "application/json")
 
 	elapsed := time.Since(start)
+
+	slog.Info("snapshot_generated",
+		"pixel_count", len(pixels),
+		"tile_count", len(results),
+		"duration_seconds", elapsed.Seconds(),
+		"canvas_width", canvasW,
+		"canvas_height", canvasH,
+		"user_id", req.UserID,
+	)
 
 	// Add final span attributes
 	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -75,6 +76,8 @@ func init() {
 		otel.SetTracerProvider(tracerProvider)
 	}
 	tracer = otel.Tracer("discord-proxy")
+
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
 	functions.HTTP("handler", Handler)
 }
@@ -395,6 +398,12 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	commandName := interaction.Data.Name
 
+	slog.Info("command_received",
+		"command", commandName,
+		"user_id", interaction.Member.User.ID,
+		"username", interaction.Member.User.Username,
+	)
+
 	// Add command attributes to span
 	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
 		span.SetAttributes(
@@ -411,6 +420,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	switch commandName {
 	case "draw":
 		if err := routeDrawCommand(ctx, interaction); err != nil {
+			slog.Error("command_failed", "command", "draw", "error", err.Error())
 			if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
 				span.RecordError(err)
 				span.SetStatus(codes.Error, err.Error())
@@ -419,6 +429,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	case "canvas":
 		if err := routeCanvasCommand(ctx, interaction); err != nil {
+			slog.Error("command_failed", "command", "canvas", "error", err.Error())
 			if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
 				span.RecordError(err)
 				span.SetStatus(codes.Error, err.Error())
@@ -427,6 +438,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	case "snapshot":
 		if err := routeSnapshotCommand(ctx, interaction); err != nil {
+			slog.Error("command_failed", "command", "snapshot", "error", err.Error())
 			if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
 				span.RecordError(err)
 				span.SetStatus(codes.Error, err.Error())
@@ -435,6 +447,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	case "session":
 		if err := routeSessionCommand(ctx, interaction); err != nil {
+			slog.Error("command_failed", "command", "session", "error", err.Error())
 			if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
 				span.RecordError(err)
 				span.SetStatus(codes.Error, err.Error())

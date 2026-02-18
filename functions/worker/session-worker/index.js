@@ -12,13 +12,21 @@
 const { NodeTracerProvider } = require('@opentelemetry/sdk-trace-node');
 const { SimpleSpanProcessor } = require('@opentelemetry/sdk-trace-base');
 const { TraceExporter } = require('@google-cloud/opentelemetry-cloud-trace-exporter');
+const { Resource } = require('@opentelemetry/resources');
+const { ATTR_SERVICE_NAME } = require('@opentelemetry/semantic-conventions');
 const { trace, SpanStatusCode, context } = require('@opentelemetry/api');
 
-const tracerProvider = new NodeTracerProvider();
+const tracerProvider = new NodeTracerProvider({
+  resource: new Resource({ [ATTR_SERVICE_NAME]: 'session-worker' }),
+});
 tracerProvider.addSpanProcessor(new SimpleSpanProcessor(new TraceExporter({ projectId: process.env.PROJECT_ID })));
 tracerProvider.register();
 
 const tracer = trace.getTracer('session-worker');
+
+function logJson(severity, message, fields = {}) {
+  console.log(JSON.stringify({ severity, message, ...fields }));
+}
 
 const functions = require('@google-cloud/functions-framework');
 const { Firestore } = require('@google-cloud/firestore');
@@ -258,6 +266,8 @@ functions.cloudEvent('handler', async (cloudEvent) => {
 
     let result;
 
+    logJson('INFO', 'session_command_received', { action, user_id: userId, username });
+
     switch (action) {
       case 'start':
         span.updateName('session.start');
@@ -302,8 +312,10 @@ functions.cloudEvent('handler', async (cloudEvent) => {
     }
 
     if (result.success) {
+      logJson('INFO', 'session_command_success', { action, user_id: userId });
       span.setStatus({ code: SpanStatusCode.OK });
     } else {
+      logJson('ERROR', 'session_command_failed', { action, user_id: userId, error: result.message });
       span.setStatus({ code: SpanStatusCode.ERROR, message: result.message });
       throw new Error(result.message);
     }

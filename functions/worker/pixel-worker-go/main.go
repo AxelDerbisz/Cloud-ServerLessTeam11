@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -70,6 +71,8 @@ func init() {
 		otel.SetTracerProvider(tracerProvider)
 	}
 	tracer = otel.Tracer("pixel-worker")
+
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 }
 
 func getFirestore() *firestore.Client {
@@ -339,6 +342,7 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 
 	// Validate color
 	if !hexColorRegex.MatchString(ev.Color) {
+		slog.Warn("pixel_validation_failed", "reason", "invalid_color", "color", ev.Color, "user_id", ev.UserID)
 		reply(fmt.Sprintf("Invalid color format: %s. Use 6-digit hex (e.g., FF0000)", ev.Color))
 		return nil
 	}
@@ -346,6 +350,7 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	// Validate bounds
 	valid, reason := validateBounds(ctx, ev.X, ev.Y)
 	if !valid {
+		slog.Warn("pixel_validation_failed", "reason", reason, "x", ev.X, "y", ev.Y, "user_id", ev.UserID)
 		reply(reason)
 		return nil
 	}
@@ -353,15 +358,19 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	// Rate limit
 	allowed, count := checkRateLimit(ctx, ev.UserID)
 	if !allowed {
+		slog.Warn("rate_limit_exceeded", "user_id", ev.UserID, "count", count, "max", rateLimitMax)
 		reply(fmt.Sprintf("Rate limit exceeded (%d/%d per minute)", count, rateLimitMax))
 		return nil
 	}
 
 	// Update pixel
 	if !updatePixel(ctx, ev.X, ev.Y, ev.Color, ev.UserID, ev.Username, ev.Source) {
+		slog.Error("pixel_placement_failed", "x", ev.X, "y", ev.Y, "user_id", ev.UserID)
 		reply("Failed to place pixel")
 		return nil
 	}
+
+	slog.Info("pixel_placed", "x", ev.X, "y", ev.Y, "color", ev.Color, "user_id", ev.UserID, "source", ev.Source)
 
 	// Publish for real-time web updates
 	publishPixelUpdate(ctx, ev.X, ev.Y, ev.Color, ev.UserID, ev.Username)

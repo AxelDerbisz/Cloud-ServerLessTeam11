@@ -114,7 +114,7 @@ data "archive_file" "function_source" {
 resource "google_storage_bucket_object" "function_source_placeholder" {
   for_each = local.function_source_paths
 
-  name   = "${each.key}/source.zip"
+  name   = "${each.key}/source-${data.archive_file.function_source[each.key].output_md5}.zip"
   bucket = module.storage.functions_source_bucket
   source = data.archive_file.function_source[each.key].output_path
 
@@ -143,7 +143,6 @@ module "discord_proxy" {
     PIXEL_EVENTS_TOPIC           = module.pubsub.pixel_events_topic
     SNAPSHOT_EVENTS_TOPIC        = module.pubsub.snapshot_events_topic
     SESSION_EVENTS_TOPIC         = module.pubsub.session_events_topic
-    ADMIN_ROLE_IDS               = var.admin_role_ids
     OTEL_SERVICE_NAME            = "discord-proxy"
   }
 
@@ -156,6 +155,11 @@ module "discord_proxy" {
     {
       key     = "DISCORD_BOT_TOKEN"
       secret  = "discord-bot-token"
+      version = "latest"
+    },
+    {
+      key     = "ADMIN_ROLE_IDS"
+      secret  = "admin-role-ids"
       version = "latest"
     }
   ]
@@ -358,4 +362,20 @@ module "api_gateway" {
     module.auth_handler,
     google_project_service.required_apis
   ]
+}
+
+# Monitoring module
+module "monitoring" {
+  source = "../../modules/monitoring"
+
+  project_id     = var.project_id
+  function_names = [
+    "discord-proxy",
+    "auth-handler",
+    "pixel-worker",
+    "snapshot-worker",
+    "session-worker",
+  ]
+
+  depends_on = [google_project_service.required_apis]
 }
