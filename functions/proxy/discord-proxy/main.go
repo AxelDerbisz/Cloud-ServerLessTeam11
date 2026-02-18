@@ -77,7 +77,16 @@ func init() {
 	}
 	tracer = otel.Tracer("discord-proxy")
 
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.MessageKey {
+				a.Key = "message"
+			} else if a.Key == slog.LevelKey {
+				a.Key = "severity"
+			}
+			return a
+		},
+	})))
 
 	functions.HTTP("handler", Handler)
 }

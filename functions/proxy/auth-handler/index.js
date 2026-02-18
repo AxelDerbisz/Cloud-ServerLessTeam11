@@ -76,7 +76,7 @@ function handleLogin(req, res) {
  * Handle GET /auth/callback - OAuth2 callback
  */
 async function handleCallback(req, res) {
-  const { code, state } = req.query;
+  const { code } = req.query;
 
   if (!code) {
     return res.status(400).json({ error: 'Missing authorization code' });

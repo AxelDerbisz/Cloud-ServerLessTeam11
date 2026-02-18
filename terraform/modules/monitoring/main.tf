@@ -7,7 +7,7 @@
 resource "google_logging_metric" "pixel_placements" {
   project = var.project_id
   name    = "pixel_placements"
-  filter  = "resource.type=\"cloud_run_revision\" AND jsonPayload.msg=\"pixel_placed\""
+  filter  = "resource.type=\"cloud_run_revision\" AND jsonPayload.message=\"pixel_placed\""
 
   metric_descriptor {
     metric_kind = "DELTA"
@@ -19,7 +19,7 @@ resource "google_logging_metric" "pixel_placements" {
 resource "google_logging_metric" "discord_commands" {
   project = var.project_id
   name    = "discord_commands"
-  filter  = "resource.type=\"cloud_run_revision\" AND jsonPayload.msg=\"command_received\""
+  filter  = "resource.type=\"cloud_run_revision\" AND jsonPayload.message=\"command_received\""
 
   metric_descriptor {
     metric_kind = "DELTA"
