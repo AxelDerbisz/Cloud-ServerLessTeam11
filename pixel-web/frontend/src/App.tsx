@@ -1,32 +1,20 @@
+// Here we import routing
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { AuthProvider } from "./auth/AuthContext";
-import Login from "./pages/Login";
-import Callback from "./pages/Callback";
-import ProtectedRoute from "./components/ProtectedRoute";
 
-// Temporary home page
-function Home() {
-  return <h1>Canvas coming soon...</h1>;
-}
+// Here we import pages
+import Home from "./pages/Home";
+import Callback from "./pages/Callback";
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/callback" element={<Callback />} />
+    <BrowserRouter>
+      <Routes>
+        {/* Here we define the home page */}
+        <Route path="/" element={<Home />} />
 
-          <Route
-            path="/"
-            element={
-              <ProtectedRoute>
-                <Home />
-              </ProtectedRoute>
-            }
-          />
-        </Routes>
-      </BrowserRouter>
-    </AuthProvider>
+        {/* Here we handle OAuth callback */}
+        <Route path="/callback" element={<Callback />} />
+      </Routes>
+    </BrowserRouter>
   );
 }

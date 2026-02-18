@@ -68,7 +68,6 @@ function handleLogin(req, res) {
 
   const authUrl = `https://discord.com/api/oauth2/authorize?${params.toString()}`;
 
-  // In production, you'd want to store state in session/cookie to validate
   res.redirect(authUrl);
 }
 
@@ -141,18 +140,13 @@ async function handleCallback(req, res) {
       JWT_SECRET
     );
 
-    // Return JWT to client
-    // In production, you'd redirect to frontend with token
-    logJson('INFO', 'auth_callback_success', { user_id: userData.id, username: userData.username });
-    res.status(200).json({
-      token: jwtToken,
-      user: {
-        id: userData.id,
-        username: userData.username,
-        discriminator: userData.discriminator,
-        avatar: userData.avatar
-      }
-    });
+    // Here we get the frontend URL from environment variables
+    const frontendUrl = process.env.FRONTEND_URL;
+
+    // Here we redirect the user back to the frontend with the JWT
+    return res.redirect(
+      `${frontendUrl}/callback?token=${jwtToken}`
+    );
   } catch (error) {
     logJson('ERROR', 'auth_callback_failed', { error: error.message });
     res.status(500).json({ error: 'Authentication failed' });

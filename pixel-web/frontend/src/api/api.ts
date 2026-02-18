@@ -1,5 +1,7 @@
 const API_URL = import.meta.env.VITE_API_URL;
 
+console.log("API_URL:", import.meta.env.VITE_API_URL);
+
 // Here we create a function to call the backend.
 // All requests will pass through this function.
 export async function apiFetch(
