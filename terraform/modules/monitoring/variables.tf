@@ -3,7 +3,4 @@ variable "project_id" {
   type        = string
 }
 
-variable "function_names" {
-  description = "List of Cloud Function names to monitor"
-  type        = list(string)
-}
+

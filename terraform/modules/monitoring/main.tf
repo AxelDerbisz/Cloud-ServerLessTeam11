@@ -32,7 +32,7 @@ resource "google_logging_metric" "discord_commands" {
 # Dashboard
 # ------------------------------------------------------------------
 resource "google_monitoring_dashboard" "cloud_functions" {
-  project        = var.project_id
+  project = var.project_id
   dashboard_json = jsonencode({
     displayName = "Cloud Functions Overview"
     mosaicLayout = {
@@ -52,10 +52,10 @@ resource "google_monitoring_dashboard" "cloud_functions" {
                   timeSeriesFilter = {
                     filter = "resource.type = \"cloud_function\" AND metric.type = \"cloudfunctions.googleapis.com/function/execution_count\""
                     aggregation = {
-                      alignmentPeriod  = "60s"
-                      perSeriesAligner = "ALIGN_RATE"
+                      alignmentPeriod    = "60s"
+                      perSeriesAligner   = "ALIGN_RATE"
                       crossSeriesReducer = "REDUCE_SUM"
-                      groupByFields    = ["resource.label.function_name"]
+                      groupByFields      = ["resource.label.function_name"]
                     }
                   }
                 }
@@ -77,10 +77,10 @@ resource "google_monitoring_dashboard" "cloud_functions" {
                   timeSeriesFilter = {
                     filter = "resource.type = \"cloud_function\" AND metric.type = \"cloudfunctions.googleapis.com/function/execution_count\" AND metric.labels.status != \"ok\""
                     aggregation = {
-                      alignmentPeriod  = "60s"
-                      perSeriesAligner = "ALIGN_RATE"
+                      alignmentPeriod    = "60s"
+                      perSeriesAligner   = "ALIGN_RATE"
                       crossSeriesReducer = "REDUCE_SUM"
-                      groupByFields    = ["resource.label.function_name"]
+                      groupByFields      = ["resource.label.function_name"]
                     }
                   }
                 }
@@ -128,10 +128,10 @@ resource "google_monitoring_dashboard" "cloud_functions" {
                   timeSeriesFilter = {
                     filter = "resource.type = \"cloud_function\" AND metric.type = \"cloudfunctions.googleapis.com/function/active_instances\""
                     aggregation = {
-                      alignmentPeriod  = "60s"
-                      perSeriesAligner = "ALIGN_MEAN"
+                      alignmentPeriod    = "60s"
+                      perSeriesAligner   = "ALIGN_MEAN"
                       crossSeriesReducer = "REDUCE_SUM"
-                      groupByFields    = ["resource.label.function_name"]
+                      groupByFields      = ["resource.label.function_name"]
                     }
                   }
                 }
@@ -154,10 +154,10 @@ resource "google_monitoring_dashboard" "cloud_functions" {
                   timeSeriesFilter = {
                     filter = "resource.type = \"pubsub_topic\" AND metric.type = \"pubsub.googleapis.com/topic/send_message_operation_count\""
                     aggregation = {
-                      alignmentPeriod  = "60s"
-                      perSeriesAligner = "ALIGN_RATE"
+                      alignmentPeriod    = "60s"
+                      perSeriesAligner   = "ALIGN_RATE"
                       crossSeriesReducer = "REDUCE_SUM"
-                      groupByFields    = ["resource.label.topic_id"]
+                      groupByFields      = ["resource.label.topic_id"]
                     }
                   }
                 }

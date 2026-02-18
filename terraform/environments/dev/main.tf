@@ -139,11 +139,11 @@ module "discord_proxy" {
   timeout                 = 60
 
   environment_variables = {
-    PROJECT_ID                   = var.project_id
-    PIXEL_EVENTS_TOPIC           = module.pubsub.pixel_events_topic
-    SNAPSHOT_EVENTS_TOPIC        = module.pubsub.snapshot_events_topic
-    SESSION_EVENTS_TOPIC         = module.pubsub.session_events_topic
-    OTEL_SERVICE_NAME            = "discord-proxy"
+    PROJECT_ID            = var.project_id
+    PIXEL_EVENTS_TOPIC    = module.pubsub.pixel_events_topic
+    SNAPSHOT_EVENTS_TOPIC = module.pubsub.snapshot_events_topic
+    SESSION_EVENTS_TOPIC  = module.pubsub.session_events_topic
+    OTEL_SERVICE_NAME     = "discord-proxy"
   }
 
   secret_environment_variables = [
@@ -190,11 +190,11 @@ module "auth_handler" {
   timeout                 = 60
 
   environment_variables = {
-    PROJECT_ID                   = var.project_id
-    DISCORD_CLIENT_ID            = var.discord_client_id
-    REDIRECT_URI                 = "https://pixel-canvas-gateway-86fcxr1p.ew.gateway.dev/auth/callback"
-    FRONTEND_URL                 = "https://team11-dev.ew.r.appspot.com"
-    OTEL_SERVICE_NAME            = "auth-handler"
+    PROJECT_ID        = var.project_id
+    DISCORD_CLIENT_ID = var.discord_client_id
+    REDIRECT_URI      = "https://pixel-canvas-gateway-86fcxr1p.ew.gateway.dev/auth/callback"
+    FRONTEND_URL      = "https://team11-dev.ew.r.appspot.com"
+    OTEL_SERVICE_NAME = "auth-handler"
   }
 
   secret_environment_variables = [
@@ -236,9 +236,9 @@ module "pixel_worker" {
   timeout               = 120
 
   environment_variables = {
-    PROJECT_ID                   = var.project_id
-    PUBLIC_PIXEL_TOPIC           = module.pubsub.public_pixel_topic
-    OTEL_SERVICE_NAME            = "pixel-worker"
+    PROJECT_ID         = var.project_id
+    PUBLIC_PIXEL_TOPIC = module.pubsub.public_pixel_topic
+    OTEL_SERVICE_NAME  = "pixel-worker"
   }
 
   secret_environment_variables = [
@@ -275,9 +275,9 @@ module "snapshot_worker" {
   timeout               = 300
 
   environment_variables = {
-    PROJECT_ID                   = var.project_id
-    SNAPSHOTS_BUCKET             = module.storage.canvas_snapshots_bucket
-    OTEL_SERVICE_NAME            = "snapshot-worker"
+    PROJECT_ID        = var.project_id
+    SNAPSHOTS_BUCKET  = module.storage.canvas_snapshots_bucket
+    OTEL_SERVICE_NAME = "snapshot-worker"
   }
 
   secret_environment_variables = [
@@ -313,8 +313,8 @@ module "session_worker" {
   timeout               = 120
 
   environment_variables = {
-    PROJECT_ID                   = var.project_id
-    OTEL_SERVICE_NAME            = "session-worker"
+    PROJECT_ID        = var.project_id
+    OTEL_SERVICE_NAME = "session-worker"
   }
 
   secret_environment_variables = [
@@ -345,13 +345,13 @@ locals {
 module "api_gateway" {
   source = "../../modules/api-gateway"
 
-  project_id               = var.project_id
-  region                   = var.region
-  api_id                   = "pixel-canvas-api"
-  api_config_id            = "pixel-canvas-config-${formatdate("YYYYMMDDHHmmss", timestamp())}"
-  gateway_id               = "pixel-canvas-gateway"
-  openapi_spec             = local.openapi_spec
-  gateway_service_account  = module.iam.proxy_functions_sa_email
+  project_id              = var.project_id
+  region                  = var.region
+  api_id                  = "pixel-canvas-api"
+  api_config_id           = "pixel-canvas-config-${formatdate("YYYYMMDDHHmmss", timestamp())}"
+  gateway_id              = "pixel-canvas-gateway"
+  openapi_spec            = local.openapi_spec
+  gateway_service_account = module.iam.proxy_functions_sa_email
 
   labels = {
     environment = "dev"
@@ -368,14 +368,7 @@ module "api_gateway" {
 module "monitoring" {
   source = "../../modules/monitoring"
 
-  project_id     = var.project_id
-  function_names = [
-    "discord-proxy",
-    "auth-handler",
-    "pixel-worker",
-    "snapshot-worker",
-    "session-worker",
-  ]
+  project_id = var.project_id
 
   depends_on = [google_project_service.required_apis]
 }

@@ -22,10 +22,4 @@ variable "discord_client_id" {
   default     = "1464237067012931665"
 }
 
-variable "placeholder_source_path" {
-  description = "Path to placeholder function source ZIP file"
-  type        = string
-  default     = "../../../scripts/placeholder.zip"
-}
-
 
