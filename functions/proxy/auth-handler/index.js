@@ -56,7 +56,7 @@ function handleLogin(req, res) {
   const state = crypto.randomBytes(16).toString('hex');
   const redirectUri = getRedirectUri(req);
 
-  logJson('INFO', 'auth_login_redirect');
+  logJson('INFO', 'auth_login_redirect', { redirect_uri: redirectUri });
 
   const params = new URLSearchParams({
     client_id: DISCORD_CLIENT_ID,
