@@ -19,7 +19,7 @@ variable "firestore_location" {
 variable "discord_client_id" {
   description = "Discord OAuth2 client ID"
   type        = string
-  default     = ""
+  default     = "1464237067012931665"
 }
 
 variable "placeholder_source_path" {

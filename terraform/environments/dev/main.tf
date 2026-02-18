@@ -189,9 +189,9 @@ module "auth_handler" {
   environment_variables = {
     PROJECT_ID                   = var.project_id
     DISCORD_CLIENT_ID            = var.discord_client_id
+    REDIRECT_URI                 = "https://pixel-canvas-gateway-86fcxr1p.ew.gateway.dev/auth/callback"
     OTEL_SERVICE_NAME            = "auth-handler"
     OTEL_EXPORTER_OTLP_ENDPOINT  = "https://telemetry.googleapis.com"
-    # REDIRECT_URI will be constructed dynamically in the function from request headers
   }
 
   secret_environment_variables = [
