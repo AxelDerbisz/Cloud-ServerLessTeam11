@@ -1,13 +1,3 @@
-/**
- * Auth Handler Function
- *
- * HTTP-triggered function that handles Discord OAuth2 flow:
- * 1. GET /auth/login - Redirects to Discord OAuth2
- * 2. GET /auth/callback - Handles OAuth2 callback, issues JWT
- * 3. GET /auth/me - Returns current user info from JWT
- */
-
-// Initialize tracing before other imports
 const { NodeTracerProvider } = require('@opentelemetry/sdk-trace-node');
 const { SimpleSpanProcessor } = require('@opentelemetry/sdk-trace-base');
 const { TraceExporter } = require('@google-cloud/opentelemetry-cloud-trace-exporter');
@@ -18,7 +8,9 @@ const { trace, SpanStatusCode } = require('@opentelemetry/api');
 const tracerProvider = new NodeTracerProvider({
   resource: new Resource({ [ATTR_SERVICE_NAME]: 'auth-handler' }),
 });
-tracerProvider.addSpanProcessor(new SimpleSpanProcessor(new TraceExporter({ projectId: process.env.PROJECT_ID })));
+tracerProvider.addSpanProcessor(
+  new SimpleSpanProcessor(new TraceExporter({ projectId: process.env.PROJECT_ID }))
+);
 tracerProvider.register();
 
 const tracer = trace.getTracer('auth-handler');
@@ -28,6 +20,7 @@ function logJson(severity, message, fields = {}) {
 }
 
 const functions = require('@google-cloud/functions-framework');
+const cookieParser = require("cookie-parser");
 const { Firestore, FieldValue } = require('@google-cloud/firestore');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
@@ -37,21 +30,39 @@ const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
 const JWT_SECRET = process.env.JWT_SECRET;
 
-const firestore = new Firestore({ projectId: PROJECT_ID, databaseId: 'team11-database' });
+const firestore = new Firestore({
+  projectId: PROJECT_ID,
+  databaseId: 'team11-database'
+});
 
 const DISCORD_API_ENDPOINT = 'https://discord.com/api/v10';
 
 
+// JWT verification using cookies
+function verifyToken(req) {
+  try {
+    const token = req.cookies?.jwt;
+    if (!token) return null;
+    return jwt.verify(token, JWT_SECRET);
+  } catch {
+    return null;
+  }
+}
+
+
+// Redirect URI
 function getRedirectUri(req) {
   if (process.env.REDIRECT_URI) {
     return process.env.REDIRECT_URI;
   }
-  // Fallback: construct from request headers
+
   const protocol = req.headers['x-forwarded-proto'] || 'https';
   const host = req.headers['x-forwarded-host'] || req.headers.host;
   return `${protocol}://${host}/auth/callback`;
 }
 
+
+// Login
 function handleLogin(req, res) {
   const state = crypto.randomBytes(16).toString('hex');
   const redirectUri = getRedirectUri(req);
@@ -71,9 +82,8 @@ function handleLogin(req, res) {
   res.redirect(authUrl);
 }
 
-/**
- * Handle GET /auth/callback - OAuth2 callback
- */
+
+// Callback
 async function handleCallback(req, res) {
   const { code } = req.query;
 
@@ -84,33 +94,26 @@ async function handleCallback(req, res) {
   try {
     const redirectUri = getRedirectUri(req);
 
-    // Exchange code for access token
     const tokenResponse = await fetch(`${DISCORD_API_ENDPOINT}/oauth2/token`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         client_id: DISCORD_CLIENT_ID,
         client_secret: DISCORD_CLIENT_SECRET,
         grant_type: 'authorization_code',
-        code: code,
+        code,
         redirect_uri: redirectUri
       })
     });
 
     if (!tokenResponse.ok) {
-      throw new Error('Failed to exchange code for token');
+      throw new Error('Failed to exchange code');
     }
 
     const tokenData = await tokenResponse.json();
-    const accessToken = tokenData.access_token;
 
-    // Get user info from Discord
     const userResponse = await fetch(`${DISCORD_API_ENDPOINT}/users/@me`, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`
-      }
+      headers: { Authorization: `Bearer ${tokenData.access_token}` }
     });
 
     if (!userResponse.ok) {
@@ -119,13 +122,13 @@ async function handleCallback(req, res) {
 
     const userData = await userResponse.json();
 
-    // Store/update user in Firestore
+    // Save user
     await firestore.collection('users').doc(userData.id).set({
       username: userData.username,
       discriminator: userData.discriminator,
       avatar: userData.avatar,
       lastLogin: new Date().toISOString(),
-      pixelCount: FieldValue.increment(0) // Initialize if new
+      pixelCount: FieldValue.increment(0)
     }, { merge: true });
 
     // Create JWT
@@ -134,127 +137,94 @@ async function handleCallback(req, res) {
         sub: userData.id,
         username: userData.username,
         discriminator: userData.discriminator,
-        iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60) // 7 days
+        exp: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60)
       },
       JWT_SECRET
     );
 
-    // Here we get the frontend URL from environment variables
-    const frontendUrl = process.env.FRONTEND_URL;
+    // Secure cookie
+    res.cookie("jwt", jwtToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "None",
+      path: "/",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
 
-    // Here we redirect the user back to the frontend with the JWT
-    return res.redirect(
-      `${frontendUrl}/callback?token=${jwtToken}`
-    );
+    // Redirect to frontend
+    res.redirect(`${process.env.FRONTEND_URL}/canvas`);
+
   } catch (error) {
     logJson('ERROR', 'auth_callback_failed', { error: error.message });
     res.status(500).json({ error: 'Authentication failed' });
   }
 }
 
-/**
- * Handle GET /auth/me - Get current user
- */
+
+// GET current user
 async function handleMe(req, res) {
-  const authHeader = req.headers.authorization;
+  const user = verifyToken(req);
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Missing authorization header' });
+  if (!user) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const token = authHeader.substring(7);
+  const userDoc = await firestore.collection('users').doc(user.sub).get();
 
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-
-    // Optionally fetch updated user data from Firestore
-    const userDoc = await firestore.collection('users').doc(decoded.sub).get();
-
-    if (!userDoc.exists) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    const userData = userDoc.data();
-
-    res.status(200).json({
-      id: decoded.sub,
-      username: decoded.username,
-      discriminator: decoded.discriminator,
-      pixelCount: userData.pixelCount || 0,
-      lastPixelAt: userData.lastPixelAt || null
-    });
-  } catch (error) {
-    logJson('WARNING', 'auth_me_invalid_token');
-    res.status(401).json({ error: 'Invalid token' });
+  if (!userDoc.exists) {
+    return res.status(404).json({ error: 'User not found' });
   }
+
+  const data = userDoc.data();
+
+  res.status(200).json({
+    id: user.sub,
+    username: user.username,
+    discriminator: user.discriminator,
+    pixelCount: data.pixelCount || 0,
+    lastPixelAt: data.lastPixelAt || null
+  });
 }
 
-/**
- * HTTP function handler
- */
+
+// Main handler
 functions.http('handler', async (req, res) => {
-  const span = tracer.startSpan('auth-handler');
+  cookieParser()(req, res, async () => {
 
-  try {
-    // Enable CORS
-    res.set('Access-Control-Allow-Origin', '*');
-    res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    const span = tracer.startSpan('auth-handler');
 
-    if (req.method === 'OPTIONS') {
-      span.setAttribute('auth.operation', 'cors_preflight');
-      span.setStatus({ code: SpanStatusCode.OK });
-      return res.status(204).send('');
-    }
-
-    if (req.method !== 'GET') {
-      span.setAttribute('auth.operation', 'method_not_allowed');
-      span.setStatus({ code: SpanStatusCode.ERROR, message: 'Method not allowed' });
-      return res.status(405).json({ error: 'Method not allowed' });
-    }
-
-    const path = req.path || '/';
-    span.setAttribute('http.path', path);
-
-    if (path.startsWith('/auth/login') || path.includes('login')) {
-      span.setAttribute('auth.operation', 'login');
-      span.updateName('auth.login');
-      const result = handleLogin(req, res);
-      span.setStatus({ code: SpanStatusCode.OK });
-      return result;
-    }
-
-    if (path.startsWith('/auth/callback') || path.includes('callback')) {
-      span.setAttribute('auth.operation', 'callback');
-      span.updateName('auth.callback');
-      const result = await handleCallback(req, res);
-      span.setStatus({ code: SpanStatusCode.OK });
-      return result;
-    }
-
-    if (path.startsWith('/auth/me') || path.includes('/me')) {
-      span.setAttribute('auth.operation', 'me');
-      span.updateName('auth.me');
-      const result = await handleMe(req, res);
-      span.setStatus({ code: SpanStatusCode.OK });
-      return result;
-    }
-
-    span.setAttribute('auth.operation', 'not_found');
-    span.setStatus({ code: SpanStatusCode.ERROR, message: 'Not found' });
-    res.status(404).json({ error: 'Not found' });
-  } catch (error) {
-    span.recordException(error);
-    span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-    res.status(500).json({ error: 'Internal server error' });
-  } finally {
-    span.end();
-    // Flush traces before function exits (required for serverless)
     try {
+      res.set("Access-Control-Allow-Origin", process.env.FRONTEND_URL);
+      res.set("Access-Control-Allow-Credentials", "true");
+      res.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+      res.set("Access-Control-Allow-Headers", "Authorization, Content-Type");
+
+      if (req.method === 'OPTIONS') {
+        return res.status(204).send('');
+      }
+
+      const path = req.path || '/';
+
+      if (path.startsWith('/auth/login')) {
+        return handleLogin(req, res);
+      }
+
+      if (path.startsWith('/auth/callback')) {
+        return await handleCallback(req, res);
+      }
+
+      if (path.startsWith('/auth/me')) {
+        return await handleMe(req, res);
+      }
+
+      res.status(404).json({ error: 'Not found' });
+
+    } catch (error) {
+      span.recordException(error);
+      res.status(500).json({ error: 'Internal server error' });
+    } finally {
+      span.end();
       await tracerProvider.forceFlush();
-    } catch (flushError) {
-      // flush failed silently
     }
-  }
+  });
 });

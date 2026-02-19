@@ -7,9 +7,10 @@
     "start": "functions-framework --target=handler"
   },
   "dependencies": {
+    "@google-cloud/firestore": "^7.0.0",
     "@google-cloud/functions-framework": "^3.3.0",
     "@google-cloud/pubsub": "^4.0.0",
-    "@google-cloud/firestore": "^7.0.0",
+    "cookie-parser": "^1.4.7",
     "jsonwebtoken": "^9.0.2"
   },
   "engines": {

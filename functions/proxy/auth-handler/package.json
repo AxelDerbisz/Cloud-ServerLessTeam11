@@ -7,14 +7,15 @@
     "start": "functions-framework --target=handler"
   },
   "dependencies": {
-    "@google-cloud/functions-framework": "^3.3.0",
     "@google-cloud/firestore": "^7.0.0",
+    "@google-cloud/functions-framework": "^3.3.0",
     "@google-cloud/opentelemetry-cloud-trace-exporter": "2.3.0",
     "@opentelemetry/api": "^1.7.0",
     "@opentelemetry/resources": "^1.22.0",
-    "@opentelemetry/sdk-trace-node": "^1.22.0",
     "@opentelemetry/sdk-trace-base": "^1.22.0",
+    "@opentelemetry/sdk-trace-node": "^1.22.0",
     "@opentelemetry/semantic-conventions": "^1.22.0",
+    "cookie-parser": "^1.4.7",
     "jsonwebtoken": "^9.0.2"
   },
   "engines": {
