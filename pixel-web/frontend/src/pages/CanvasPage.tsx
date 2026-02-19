@@ -16,12 +16,25 @@ const COLORS = [
   "#00ffff",
 ];
 
+interface PixelData {
+  color: string;
+  username: string;
+  updatedAt: string;
+  userId: string;
+}
+
+interface TooltipData {
+  x: number;
+  y: number;
+  pixel: PixelData;
+}
+
 export default function Canvas() {
   const { user, loading } = useAuth();
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Here we store all pixels.
-  const [pixels, setPixels] = useState<Record<string, string>>({});
+  // Here we store all pixels with full data.
+  const [pixels, setPixels] = useState<Record<string, PixelData>>({});
 
   // Here we store the selected color.
   const [selectedColor, setSelectedColor] = useState("#000000");
@@ -32,6 +45,10 @@ export default function Canvas() {
   // Here we store canvas dimensions from session.
   const [canvasWidth, setCanvasWidth] = useState(100);
   const [canvasHeight, setCanvasHeight] = useState(100);
+
+  // Here we store tooltip data for hover.
+  const [tooltip, setTooltip] = useState<TooltipData | null>(null);
+  const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
 
   // Here we load session dimensions once.
   useEffect(() => {
@@ -63,9 +80,16 @@ export default function Canvas() {
               delete updated[docId];
             } else {
               const data = change.doc.data();
-              updated[docId] = data.color;
+              console.log('Pixel loaded:', { docId, data });
+              updated[docId] = {
+                color: data.color,
+                username: data.username || "Unknown",
+                updatedAt: data.updatedAt || new Date().toISOString(),
+                userId: data.userId || "",
+              };
             }
           });
+          console.log('Total pixels loaded:', Object.keys(updated).length, 'Sample keys:', Object.keys(updated).slice(0, 5));
           return updated;
         });
         setCanvasLoading(false);
@@ -103,12 +127,44 @@ export default function Canvas() {
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
     // Draw pixels
-    Object.entries(pixels).forEach(([key, color]) => {
+    Object.entries(pixels).forEach(([key, pixelData]) => {
       const [x, y] = key.split("_").map(Number);
-      ctx.fillStyle = `#${color}`;
+      ctx.fillStyle = `#${pixelData.color}`;
       ctx.fillRect(x, y, 1, 1);
     });
   }, [pixels, canvasWidth, canvasHeight]);
+
+  // Here we handle mouse movement for hover tooltip.
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvasWidth / rect.width;
+    const scaleY = canvasHeight / rect.height;
+
+    const pixelX = Math.floor((e.clientX - rect.left) * scaleX);
+    const pixelY = Math.floor((e.clientY - rect.top) * scaleY);
+
+    setMousePos({ x: e.clientX, y: e.clientY });
+
+    const key = `${pixelX}_${pixelY}`;
+    const pixelData = pixels[key];
+
+    console.log('Hover:', { pixelX, pixelY, key, hasData: !!pixelData, totalPixels: Object.keys(pixels).length });
+
+    if (pixelData) {
+      console.log('Showing tooltip:', pixelData);
+      setTooltip({ x: pixelX, y: pixelY, pixel: pixelData });
+    } else {
+      setTooltip(null);
+    }
+  };
+
+  const handleMouseLeave = () => {
+    setTooltip(null);
+    setMousePos(null);
+  };
 
   // Here we handle canvas clicks.
   const handleCanvasClick = async (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -152,6 +208,16 @@ export default function Canvas() {
     }
   };
 
+  // Here we format the timestamp.
+  const formatTime = (isoString: string) => {
+    try {
+      const date = new Date(isoString);
+      return date.toLocaleString();
+    } catch {
+      return "Unknown time";
+    }
+  };
+
   // Here we wait for authentication to finish.
   if (loading) {
     return <div style={{ padding: "20px" }}>Loading authentication...</div>;
@@ -163,7 +229,7 @@ export default function Canvas() {
   }
 
   return (
-    <div style={{ padding: "20px", fontFamily: "Arial, sans-serif" }}>
+    <div style={{ padding: "20px", fontFamily: "Arial, sans-serif", position: "relative" }}>
       {/* Here we show user info */}
       <h2>
         Welcome {user ? user.username : "Guest"}
@@ -198,11 +264,14 @@ export default function Canvas() {
         display: "inline-block",
         background: "#f0f0f0",
         borderRadius: "4px",
-        padding: "2px"
+        padding: "2px",
+        position: "relative",
       }}>
         <canvas
           ref={canvasRef}
           onClick={handleCanvasClick}
+          onMouseMove={handleMouseMove}
+          onMouseLeave={handleMouseLeave}
           style={{
             cursor: "crosshair",
             imageRendering: "pixelated",
@@ -210,6 +279,29 @@ export default function Canvas() {
           }}
         />
       </div>
+
+      {/* Here we show the hover tooltip */}
+      {tooltip && mousePos && (
+        <div style={{
+          position: "fixed",
+          left: mousePos.x + 15,
+          top: mousePos.y + 15,
+          background: "rgba(0, 0, 0, 0.9)",
+          color: "#fff",
+          padding: "8px 12px",
+          borderRadius: "6px",
+          fontSize: "13px",
+          pointerEvents: "none",
+          zIndex: 1000,
+          boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+          whiteSpace: "nowrap",
+        }}>
+          <div><strong>Position:</strong> ({tooltip.x}, {tooltip.y})</div>
+          <div><strong>Color:</strong> #{tooltip.pixel.color}</div>
+          <div><strong>Placed by:</strong> {tooltip.pixel.username}</div>
+          <div><strong>Time:</strong> {formatTime(tooltip.pixel.updatedAt)}</div>
+        </div>
+      )}
 
       {!user && (
         <div style={{ marginTop: "20px", padding: "10px", background: "#fff3cd", borderRadius: "4px" }}>
