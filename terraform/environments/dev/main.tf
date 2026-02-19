@@ -190,11 +190,12 @@ module "auth_handler" {
   timeout                 = 60
 
   environment_variables = {
-    PROJECT_ID        = var.project_id
-    DISCORD_CLIENT_ID = var.discord_client_id
-    REDIRECT_URI      = "https://pixel-canvas-gateway-86fcxr1p.ew.gateway.dev/auth/callback"
-    FRONTEND_URL      = "https://team11-dev.ew.r.appspot.com"
-    OTEL_SERVICE_NAME = "auth-handler"
+    PROJECT_ID                   = var.project_id
+    DISCORD_CLIENT_ID            = var.discord_client_id
+    REDIRECT_URI                 = "https://pixel-canvas-gateway-86fcxr1p.ew.gateway.dev/auth/callback"
+    FRONTEND_URL                 = "https://team11-dev.ew.r.appspot.com"
+    OTEL_SERVICE_NAME            = "auth-handler"
+    OTEL_EXPORTER_OTLP_ENDPOINT  = "https://telemetry.googleapis.com"
   }
 
   secret_environment_variables = [
@@ -362,13 +363,4 @@ module "api_gateway" {
     module.auth_handler,
     google_project_service.required_apis
   ]
-}
-
-# Monitoring module
-module "monitoring" {
-  source = "../../modules/monitoring"
-
-  project_id = var.project_id
-
-  depends_on = [google_project_service.required_apis]
 }

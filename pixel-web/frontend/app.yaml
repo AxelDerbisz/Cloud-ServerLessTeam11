@@ -1,0 +1,16 @@
+runtime: nodejs20
+
+handlers:
+  - url: /assets
+    static_dir: dist/assets
+
+  - url: /(.*\.(js|css|png|jpg|svg|ico|json))
+    static_files: dist/\1
+    upload: dist/.*
+
+  - url: /.*
+    static_files: dist/index.html
+    upload: dist/index.html
+
+env_variables:
+  VITE_API_URL: "https://pixel-canvas-gateway-86fcxr1p.ew.gateway.dev"
