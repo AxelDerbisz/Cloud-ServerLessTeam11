@@ -194,6 +194,7 @@ module "auth_handler" {
     DISCORD_CLIENT_ID            = var.discord_client_id
     REDIRECT_URI                 = "https://pixel-canvas-gateway-86fcxr1p.ew.gateway.dev/auth/callback"
     FRONTEND_URL                 = "https://team11-dev.ew.r.appspot.com"
+    PIXEL_EVENTS_TOPIC           = module.pubsub.pixel_events_topic
     OTEL_SERVICE_NAME            = "auth-handler"
     OTEL_EXPORTER_OTLP_ENDPOINT  = "https://telemetry.googleapis.com"
   }
@@ -240,6 +241,7 @@ module "pixel_worker" {
     PROJECT_ID         = var.project_id
     PUBLIC_PIXEL_TOPIC = module.pubsub.public_pixel_topic
     OTEL_SERVICE_NAME  = "pixel-worker"
+    DISCORD_CHANNEL_ID = "1464188353040617577"
   }
 
   secret_environment_variables = [
@@ -339,6 +341,7 @@ locals {
   openapi_spec = templatefile("${path.module}/api-spec.yaml", {
     discord_proxy_url = module.discord_proxy.function_uri
     auth_handler_url  = module.auth_handler.function_uri
+    web_proxy_url     = "https://web-proxy-exci5e6wua-ew.a.run.app"
   })
 }
 

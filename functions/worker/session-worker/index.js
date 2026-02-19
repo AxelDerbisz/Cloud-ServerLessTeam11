@@ -217,8 +217,8 @@ async function getCanvasStatus() {
     const canvasHeight = session.canvasHeight || '∞';
 
     // Count pixels
-    const pixelDocs = await firestore.collection('pixels').select().get();
-    const pixelCount = pixelDocs.size;
+    const pixelCountQuery = await firestore.collection('pixels').count().get();
+    const pixelCount = pixelCountQuery.data().count;
 
     return {
       success: true,

@@ -2,13 +2,14 @@
 
 // Here we create a reusable API fetch.
 export async function apiFetch(path: string, options: RequestInit = {}) {
+  const token = localStorage.getItem("jwt");
   const res = await fetch(
     `${import.meta.env.VITE_API_URL}${path}`,
     {
       ...options,
-      credentials: "include", // Here we send cookies automatically
       headers: {
         "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(options.headers || {}),
       },
     }

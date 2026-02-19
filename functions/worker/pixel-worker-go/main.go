@@ -36,22 +36,24 @@ const (
 )
 
 var (
-	projectID        string
-	discordBotToken  string
-	publicPixelTopic string
-	fsClient         *firestore.Client
-	psClient         *pubsub.Client
-	fsOnce           sync.Once
-	psOnce           sync.Once
-	hexColorRegex    = regexp.MustCompile(`^[0-9A-Fa-f]{6}$`)
-	tracer           trace.Tracer
-	tracerProvider   *sdktrace.TracerProvider
+	projectID           string
+	discordBotToken     string
+	publicPixelTopic    string
+	discordChannelID    string
+	fsClient            *firestore.Client
+	psClient            *pubsub.Client
+	fsOnce              sync.Once
+	psOnce              sync.Once
+	hexColorRegex       = regexp.MustCompile(`^[0-9A-Fa-f]{6}$`)
+	tracer              trace.Tracer
+	tracerProvider      *sdktrace.TracerProvider
 )
 
 func init() {
 	projectID = os.Getenv("PROJECT_ID")
 	discordBotToken = strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
 	publicPixelTopic = os.Getenv("PUBLIC_PIXEL_TOPIC")
+	discordChannelID = strings.TrimSpace(os.Getenv("DISCORD_CHANNEL_ID"))
 	if publicPixelTopic == "" {
 		publicPixelTopic = "public-pixel"
 	}
@@ -135,6 +137,26 @@ func sendFollowUp(appID, token, content string) {
 	req.Header.Set("Authorization", "Bot "+discordBotToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		return
+	}
+	resp.Body.Close()
+}
+
+func sendChannelMessage(username, message string) {
+	if discordChannelID == "" || discordBotToken == "" {
+		return
+	}
+	payload := map[string]interface{}{
+		"content": fmt.Sprintf("🎨 **%s** %s", username, message),
+	}
+	body, _ := json.Marshal(payload)
+	url := fmt.Sprintf("%s/channels/%s/messages", discordAPI, discordChannelID)
+	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bot "+discordBotToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		slog.Warn("discord_channel_message_failed", "error", err.Error())
 		return
 	}
 	resp.Body.Close()
@@ -384,7 +406,13 @@ func handleCloudEvent(ctx context.Context, e event.Event) error {
 	// Publish for real-time web updates
 	publishPixelUpdate(ctx, ev.X, ev.Y, ev.Color, ev.UserID, ev.Username)
 
-	reply(fmt.Sprintf("Pixel placed at (%d, %d) with color #%s", ev.X, ev.Y, ev.Color))
+	successMsg := fmt.Sprintf("Pixel placed at (%d, %d) with color #%s", ev.X, ev.Y, ev.Color)
+	reply(successMsg)
+
+	// Send Discord notification for web pixels
+	if ev.Source == "web" {
+		sendChannelMessage(ev.Username, fmt.Sprintf("placed a pixel at (%d, %d) with color #%s", ev.X, ev.Y, ev.Color))
+	}
 
 	// Flush traces before function exits (required for serverless)
 	if tracerProvider != nil {
