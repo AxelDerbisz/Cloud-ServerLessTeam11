@@ -7,6 +7,9 @@ schemes:
   - "https"
 produces:
   - "application/json"
+x-google-endpoints:
+  - name: "pixel-canvas-gateway-86fcxr1p.ew.gateway.dev"
+    allowCors: true
 paths:
   /discord/webhook:
     post:
@@ -71,3 +74,84 @@ paths:
           description: "Unauthorized"
         404:
           description: "User not found"
+    options:
+      summary: "CORS preflight for /auth/me"
+      operationId: "authMeCors"
+      x-google-backend:
+        address: "${auth_handler_url}/auth/me"
+        protocol: "h2"
+      responses:
+        204:
+          description: "CORS preflight response"
+  /api/pixels:
+    get:
+      summary: "Get all pixels"
+      operationId: "getPixels"
+      x-google-backend:
+        address: "${web_proxy_url}/api/pixels"
+        protocol: "h2"
+      responses:
+        200:
+          description: "List of pixels"
+        500:
+          description: "Internal server error"
+    post:
+      summary: "Place a pixel"
+      operationId: "placePixel"
+      x-google-backend:
+        address: "${web_proxy_url}/api/pixels"
+        protocol: "h2"
+      parameters:
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            properties:
+              x:
+                type: integer
+              y:
+                type: integer
+              color:
+                type: string
+      responses:
+        202:
+          description: "Pixel placement accepted"
+        401:
+          description: "Unauthorized"
+        400:
+          description: "Invalid pixel data"
+    options:
+      summary: "CORS preflight for /api/pixels"
+      operationId: "pixelsCors"
+      security: []
+      x-google-backend:
+        address: "${web_proxy_url}/api/pixels"
+        protocol: "h2"
+        disable_auth: true
+      responses:
+        204:
+          description: "CORS preflight response"
+  /api/canvas:
+    get:
+      summary: "Get canvas state"
+      operationId: "getCanvas"
+      x-google-backend:
+        address: "${web_proxy_url}/api/canvas"
+        protocol: "h2"
+      responses:
+        200:
+          description: "Canvas state"
+        500:
+          description: "Internal server error"
+    options:
+      summary: "CORS preflight for /api/canvas"
+      operationId: "canvasCors"
+      security: []
+      x-google-backend:
+        address: "${web_proxy_url}/api/canvas"
+        protocol: "h2"
+        disable_auth: true
+      responses:
+        204:
+          description: "CORS preflight response"

@@ -1,0 +1,22 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Allow public reads for pixels collection (real-time streaming)
+    match /pixels/{pixelId} {
+      allow read: if true;
+      allow write: if false; // All writes go through Cloud Functions
+    }
+
+    // Allow public reads for sessions (canvas state)
+    match /sessions/{sessionId} {
+      allow read: if true;
+      allow write: if false; // All writes go through Cloud Functions
+    }
+
+    // Deny all other collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

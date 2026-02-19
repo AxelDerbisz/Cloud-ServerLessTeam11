@@ -1,17 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
+import { collection, onSnapshot, doc, getDoc } from "firebase/firestore";
+import { db } from "../firebase";
 import { apiFetch } from "../api/api";
 import { useAuth } from "../auth/AuthContext";
-
-// Here we define the type of a pixel.
-type Pixel = {
-  x: number;
-  y: number;
-  color: string;
-};
-
-// Here we define canvas size.
-const WIDTH = 50;
-const HEIGHT = 50;
 
 // Here we define available colors.
 const COLORS = [
@@ -27,6 +18,7 @@ const COLORS = [
 
 export default function Canvas() {
   const { user, loading } = useAuth();
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // Here we store all pixels.
   const [pixels, setPixels] = useState<Record<string, string>>({});
@@ -37,34 +29,113 @@ export default function Canvas() {
   // Here we store loading state.
   const [canvasLoading, setCanvasLoading] = useState(true);
 
-  // Here we load pixels from backend.
-  async function loadPixels() {
-    try {
-      const data = await apiFetch("/api/pixels");
+  // Here we store canvas dimensions from session.
+  const [canvasWidth, setCanvasWidth] = useState(100);
+  const [canvasHeight, setCanvasHeight] = useState(100);
 
-      const pixelMap: Record<string, string> = {};
-      data.pixels.forEach((p: Pixel) => {
-        pixelMap[`${p.x}_${p.y}`] = p.color;
-      });
-
-      setPixels(pixelMap);
-    } catch (err) {
-      console.error("Failed to load pixels", err);
-    } finally {
-      setCanvasLoading(false);
-    }
-  }
-
-  // Here we load pixels when component mounts.
+  // Here we load session dimensions once.
   useEffect(() => {
-    loadPixels();
+    const loadSession = async () => {
+      try {
+        const sessionDoc = await getDoc(doc(db, "sessions", "current"));
+        if (sessionDoc.exists()) {
+          const session = sessionDoc.data();
+          setCanvasWidth(session.canvasWidth || 100);
+          setCanvasHeight(session.canvasHeight || 100);
+        }
+      } catch (error) {
+        console.error("Failed to load session", error);
+      }
+    };
+    loadSession();
   }, []);
 
-  // Here we handle placing a pixel.
-  async function handlePixelClick(x: number, y: number) {
+  // Here we stream pixels from Firestore in real-time.
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "pixels"),
+      (snapshot) => {
+        setPixels((prev) => {
+          const updated = { ...prev };
+          snapshot.docChanges().forEach((change) => {
+            const docId = change.doc.id;
+            if (change.type === "removed") {
+              delete updated[docId];
+            } else {
+              const data = change.doc.data();
+              updated[docId] = data.color;
+            }
+          });
+          return updated;
+        });
+        setCanvasLoading(false);
+      },
+      (error) => {
+        console.error("Firestore stream error", error);
+        setCanvasLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  // Here we render pixels to canvas whenever they change.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Calculate display size - fit to max 800px
+    const maxDisplaySize = 800;
+    const scale = Math.min(1, maxDisplaySize / Math.max(canvasWidth, canvasHeight));
+    const displayWidth = canvasWidth * scale;
+    const displayHeight = canvasHeight * scale;
+
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    canvas.style.width = `${displayWidth}px`;
+    canvas.style.height = `${displayHeight}px`;
+
+    // Clear canvas
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+    // Draw pixels
+    Object.entries(pixels).forEach(([key, color]) => {
+      const [x, y] = key.split("_").map(Number);
+      ctx.fillStyle = `#${color}`;
+      ctx.fillRect(x, y, 1, 1);
+    });
+  }, [pixels, canvasWidth, canvasHeight]);
+
+  // Here we handle canvas clicks.
+  const handleCanvasClick = async (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!user) {
       alert("You must be logged in to place pixels.");
       return;
+    }
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvasWidth / rect.width;
+    const scaleY = canvasHeight / rect.height;
+
+    const x = Math.floor((e.clientX - rect.left) * scaleX);
+    const y = Math.floor((e.clientY - rect.top) * scaleY);
+
+    if (x < 0 || x >= canvasWidth || y < 0 || y >= canvasHeight) {
+      return;
+    }
+
+    // Optimistic update
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.fillStyle = selectedColor;
+      ctx.fillRect(x, y, 1, 1);
     }
 
     try {
@@ -76,86 +147,75 @@ export default function Canvas() {
           color: selectedColor,
         }),
       });
-
-      // Here we update the local canvas instantly.
-      setPixels((prev) => ({
-        ...prev,
-        [`${x}_${y}`]: selectedColor,
-      }));
     } catch (err) {
       console.error("Failed to place pixel", err);
     }
-  }
+  };
 
   // Here we wait for authentication to finish.
   if (loading) {
-    return <div>Loading authentication...</div>;
+    return <div style={{ padding: "20px" }}>Loading authentication...</div>;
   }
 
   // Here we wait for canvas data.
   if (canvasLoading) {
-    return <div>Loading canvas...</div>;
+    return <div style={{ padding: "20px" }}>Loading canvas...</div>;
   }
 
   return (
-    <div style={{ padding: "20px" }}>
+    <div style={{ padding: "20px", fontFamily: "Arial, sans-serif" }}>
       {/* Here we show user info */}
       <h2>
         Welcome {user ? user.username : "Guest"}
       </h2>
+      <p>Canvas size: {canvasWidth} x {canvasHeight} | Pixels placed: {Object.keys(pixels).length}</p>
 
       {/* Here we show color picker */}
-      <div style={{ marginBottom: "10px" }}>
-        <h3>Select color</h3>
-        {COLORS.map((color) => (
-          <button
-            key={color}
-            onClick={() => setSelectedColor(color)}
-            style={{
-              backgroundColor: color,
-              width: 30,
-              height: 30,
-              margin: 2,
-              border:
-                selectedColor === color
-                  ? "3px solid black"
-                  : "1px solid gray",
-              cursor: "pointer",
-            }}
-          />
-        ))}
-      </div>
-
-      {/* Here we render the canvas grid */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: `repeat(${WIDTH}, 10px)`,
-          gap: "1px",
-          backgroundColor: "#ccc",
-          width: "fit-content",
-        }}
-      >
-        {Array.from({ length: WIDTH * HEIGHT }).map((_, i) => {
-          const x = i % WIDTH;
-          const y = Math.floor(i / WIDTH);
-          const key = `${x}_${y}`;
-          const color = pixels[key] || "#ffffff";
-
-          return (
-            <div
-              key={key}
-              onClick={() => handlePixelClick(x, y)}
+      <div style={{ marginBottom: "20px" }}>
+        <h3 style={{ margin: "10px 0" }}>Select color:</h3>
+        <div style={{ display: "flex", gap: "5px" }}>
+          {COLORS.map((color) => (
+            <button
+              key={color}
+              onClick={() => setSelectedColor(color)}
               style={{
-                width: 10,
-                height: 10,
                 backgroundColor: color,
+                width: 40,
+                height: 40,
+                border: selectedColor === color ? "3px solid #000" : "1px solid #999",
                 cursor: "pointer",
+                borderRadius: "4px",
               }}
+              title={color}
             />
-          );
-        })}
+          ))}
+        </div>
       </div>
+
+      {/* Here we render the canvas */}
+      <div style={{
+        border: "2px solid #999",
+        display: "inline-block",
+        background: "#f0f0f0",
+        borderRadius: "4px",
+        padding: "2px"
+      }}>
+        <canvas
+          ref={canvasRef}
+          onClick={handleCanvasClick}
+          style={{
+            cursor: "crosshair",
+            imageRendering: "pixelated",
+            display: "block",
+          }}
+        />
+      </div>
+
+      {!user && (
+        <div style={{ marginTop: "20px", padding: "10px", background: "#fff3cd", borderRadius: "4px" }}>
+          <strong>Note:</strong> You must be logged in to place pixels.
+        </div>
+      )}
     </div>
   );
 }

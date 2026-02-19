@@ -9,15 +9,26 @@ const PIXEL_EVENTS_TOPIC = process.env.PIXEL_EVENTS_TOPIC;
 const JWT_SECRET = process.env.JWT_SECRET;
 
 const pubsub = new PubSub({ projectId: PROJECT_ID });
-const firestore = new Firestore({ projectId: PROJECT_ID });
+const firestore = new Firestore({ projectId: PROJECT_ID, databaseId: 'team11-database' });
 
 // Here we create middleware to parse cookies.
 const parseCookies = cookieParser();
 
 
-//Here we verify JWT from cookies instead of Authorization header.
+//Here we verify JWT from Authorization header or cookies.
 function verifyToken(req) {
-  const token = req.cookies?.jwt;
+  let token = null;
+
+  // Check X-Forwarded-Authorization (API Gateway forwards Authorization header here)
+  const authHeader = req.headers['x-forwarded-authorization'] || req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.substring(7);
+  }
+
+  // Fallback to cookies
+  if (!token) {
+    token = req.cookies?.jwt;
+  }
 
   if (!token) {
     return null;
@@ -122,7 +133,7 @@ async function placePixel(req, res, user) {
     const messageData = {
       x,
       y,
-      color,
+      color: color.replace(/^#/, '').toUpperCase(), // Strip # and uppercase (match discord-proxy format)
       userId: user.sub,
       username: user.username,
       timestamp: new Date().toISOString()
@@ -153,7 +164,7 @@ functions.http('handler', async (req, res) => {
   res.set('Access-Control-Allow-Origin', process.env.FRONTEND_URL);
   res.set('Access-Control-Allow-Credentials', 'true');
   res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.set('Access-Control-Allow-Headers', 'Content-Type');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
     return res.status(204).send('');
