@@ -1,132 +1,189 @@
-# Firestore Schema Design
+# Firestore Schema
 
-## Overview
-
-This document describes the Firestore data model for the Collaborative Pixel Canvas application.
-
-The design prioritizes:
-- **Scalability**: Supports near-infinite canvas size through chunking
-- **Cost efficiency**: Balanced read/write operations
-- **Simplicity**: Minimal collections, clear structure
+> **Database:** `team11-database` (Firestore Native mode, project `team11-dev`)
 
 ---
 
-## Collections
+## Collections Overview
 
-### 1. `config/session`
+| Collection | Document ID | Purpose | Client Access |
+|---|---|---|---|
+| `pixels` | `{x}_{y}` | One document per placed pixel | Read (public) |
+| `sessions` | `current` / `archive_{ts}` | Canvas session state | Read (public) |
+| `rate_limits` | `{userId}_{windowMinute}` | Per-user rate limiting (20/min) | None |
+| `users` | `{discordUserId}` | User profiles and stats | None |
 
-Stores global game configuration and state.
+---
+
+## `pixels/{x}_{y}`
+
+Stores individual pixel data. Document ID is the pixel coordinate (e.g., `5_12`).
 
 | Field | Type | Description |
-|-------|------|-------------|
-| `status` | string | Game state: `"active"`, `"paused"`, `"ended"` |
-| `palette` | array[string] | Available colors, e.g., `["#FFFFFF", "#000000", "#FF4500", ...]` |
-| `chunkSize` | number | Pixels per chunk dimension (default: `50` = 50x50 chunks) |
-| `pixelsPerMinute` | number | Rate limit per user (default: `20`) |
+|---|---|---|
+| `x` | number | X coordinate |
+| `y` | number | Y coordinate |
+| `color` | string | 6-digit hex without `#` (e.g., `"FF0000"`) |
+| `userId` | string | Discord user ID of last placer |
+| `username` | string | Discord username of last placer |
+| `source` | string | `"web"` or `"discord"` |
+| `updatedAt` | string (RFC 3339) | Timestamp of last update |
 
-**Example:**
+**Composite index:** `userId` ASC, `updatedAt` DESC, `__name__` DESC
+
+**Example** - `pixels/5_12`:
+```json
+{
+  "x": 5,
+  "y": 12,
+  "color": "FF0000",
+  "userId": "123456789012345678",
+  "username": "PlayerOne",
+  "source": "discord",
+  "updatedAt": "2026-02-20T12:34:56Z"
+}
+```
+
+**Read by:** pixel-worker, snapshot-worker, session-worker, web-proxy, frontend (onSnapshot)
+**Written by:** pixel-worker (in a Firestore transaction)
+
+---
+
+## `sessions/current`
+
+Singleton document holding the active canvas session.
+
+| Field | Type | Description |
+|---|---|---|
+| `status` | string | `"active"` or `"paused"` |
+| `startedAt` | string (ISO 8601) | When session started |
+| `canvasWidth` | number | Canvas width in pixels (default 100) |
+| `canvasHeight` | number | Canvas height in pixels (default 100) |
+| `createdBy` | string | Discord user ID of creator |
+| `createdByUsername` | string | Discord username of creator |
+| `pausedAt` | string (ISO 8601) | When paused (optional) |
+| `resumedAt` | string (ISO 8601) | When resumed (optional) |
+| `resetAt` | string (ISO 8601) | When canvas was last reset (optional) |
+| `pixelsCleared` | number | Count of pixels deleted on last reset (optional) |
+
+**Example** - `sessions/current`:
 ```json
 {
   "status": "active",
-  "palette": ["#FFFFFF", "#000000", "#FF4500", "#0000FF", "#00FF00"],
-  "chunkSize": 50,
-  "pixelsPerMinute": 20
+  "startedAt": "2026-02-20T10:00:00.000Z",
+  "canvasWidth": 100,
+  "canvasHeight": 100,
+  "createdBy": "123456789012345678",
+  "createdByUsername": "AdminUser"
 }
 ```
 
+### `sessions/archive_{timestamp}`
+
+Created when a session ends. Contains all fields from `current` plus:
+
+| Field | Type | Description |
+|---|---|---|
+| `status` | string | Overwritten to `"ended"` |
+| `endedAt` | string (ISO 8601) | When session ended |
+
+**Read by:** pixel-worker, snapshot-worker, session-worker, web-proxy, frontend
+**Written by:** session-worker
+
 ---
 
-### 2. `chunks/{chunkX_chunkY}`
+## `rate_limits/{userId}_{windowMinute}`
 
-Stores pixel data grouped by spatial chunks. Only chunks with placed pixels exist (sparse storage).
-
-**Document ID format:** `{chunkX}_{chunkY}` where coordinates are chunk indices (not pixel coordinates).
+Per-user rate limiting. Document ID combines the user ID and the current minute (`floor(unixSeconds / 60)`).
 
 | Field | Type | Description |
-|-------|------|-------------|
-| `pixels` | map | Map of pixel coordinates to pixel data |
+|---|---|---|
+| `count` | number | Pixels placed in this window (incremented atomically) |
+| `userId` | string | Discord user ID |
+| `window` | number | Window minute value (`floor(unix / 60)`) |
+| `expiresAt` | string (RFC 3339) | Expiry timestamp (window + 120s) |
 
-**Pixel data structure:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `c` | number | Color palette index |
-| `u` | string | Discord user ID who placed the pixel |
-| `t` | number | Unix timestamp of placement |
-
-**Example:** Document `chunks/2_3` (chunk at grid position 2,3)
+**Example** - `rate_limits/123456789012345678_28473870`:
 ```json
 {
-  "pixels": {
-    "115_167": { "c": 2, "u": "123456789", "t": 1706012345 },
-    "116_167": { "c": 0, "u": "987654321", "t": 1706012400 },
-    "120_180": { "c": 4, "u": "123456789", "t": 1706012500 }
-  }
+  "count": 5,
+  "userId": "123456789012345678",
+  "window": 28473870,
+  "expiresAt": "2026-02-20T12:36:56Z"
 }
 ```
 
-**Coordinate calculation:**
-```
-chunkX = floor(pixelX / chunkSize)
-chunkY = floor(pixelY / chunkSize)
-```
+**Read by:** pixel-worker (authoritative check in transaction), web-proxy (pre-check)
+**Written by:** pixel-worker (in a Firestore transaction)
 
 ---
 
-### 3. `users/{discordId}`
+## `users/{discordUserId}`
 
-Stores per-user data including rate limiting and profile info.
+User profile and lifetime stats. Created on first pixel placement, updated on OAuth login.
 
 | Field | Type | Description |
-|-------|------|-------------|
-| `username` | string | Discord username (for display when viewing pixel author) |
-| `pixelCount` | number | Pixels placed in current window |
-| `windowStart` | number | Unix timestamp when current rate limit window started |
+|---|---|---|
+| `id` | string | Discord user ID |
+| `username` | string | Discord username |
+| `discriminator` | string | Discord discriminator (e.g., `"0"`) |
+| `avatar` | string | Discord avatar hash |
+| `lastLogin` | string (ISO 8601) | Last OAuth login time |
+| `lastPixelAt` | string (RFC 3339) | Timestamp of last pixel placed |
+| `pixelCount` | number | Total pixels placed (lifetime) |
+| `createdAt` | string (RFC 3339) | When user doc was first created |
 
-**Example:** Document `users/123456789`
+**Example** - `users/123456789012345678`:
 ```json
 {
+  "id": "123456789012345678",
   "username": "PlayerOne",
-  "pixelCount": 5,
-  "windowStart": 1706012000
+  "discriminator": "0",
+  "avatar": "a_abc123def456",
+  "lastLogin": "2026-02-20T09:00:00.000Z",
+  "lastPixelAt": "2026-02-20T12:34:56Z",
+  "pixelCount": 42,
+  "createdAt": "2026-02-15T08:00:00Z"
 }
 ```
 
-**Rate limiting logic:**
-```
-if (now - windowStart) > 60 seconds:
-    reset: pixelCount = 1, windowStart = now
-else if pixelCount < pixelsPerMinute:
-    increment: pixelCount++
-else:
-    reject: rate limited
-```
+**Read by:** auth-handler (`/auth/me`), pixel-worker
+**Written by:** pixel-worker (set/update in transaction), auth-handler (merge on OAuth callback)
+
+---
+
+## Security Rules
+
+| Collection | Client Read | Client Write | Server Read | Server Write |
+|---|---|---|---|---|
+| `pixels` | Public | Denied | Yes | Yes |
+| `sessions` | Public | Denied | Yes | Yes |
+| `rate_limits` | Denied | Denied | Yes | Yes |
+| `users` | Denied | Denied | Yes | Yes |
+
+`pixels` and `sessions` are public-read to allow the frontend to stream updates via `onSnapshot`. All writes go through Cloud Functions only.
 
 ---
 
 ## Visual Diagram
 
 ```
-Firestore
+Firestore (team11-database)
 │
-├── config/
-│   └── session
-│       ├── status: "active"
-│       ├── palette: [...]
-│       ├── chunkSize: 50
-│       └── pixelsPerMinute: 20
+├── pixels/
+│   ├── 0_0       -> { x, y, color, userId, username, source, updatedAt }
+│   ├── 5_12      -> { ... }
+│   └── 99_99     -> { ... }
 │
-├── chunks/
-│   ├── 0_0
-│   │   └── pixels: { "x_y": { c, u, t }, ... }
-│   ├── 0_1
-│   │   └── pixels: { ... }
+├── sessions/
+│   ├── current           -> { status, startedAt, canvasWidth, canvasHeight, ... }
+│   └── archive_170843..  -> { ..., status: "ended", endedAt }
+│
+├── rate_limits/
+│   ├── 12345678_28473870 -> { count, userId, window, expiresAt }
 │   └── ...
 │
 └── users/
-    ├── 123456789
-    │   ├── username: "PlayerOne"
-    │   ├── pixelCount: 5
-    │   └── windowStart: 1706012000
+    ├── 123456789012345678 -> { id, username, pixelCount, lastPixelAt, ... }
     └── ...
 ```

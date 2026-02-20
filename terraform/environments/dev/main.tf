@@ -368,3 +368,12 @@ module "api_gateway" {
     google_project_service.required_apis
   ]
 }
+
+# Monitoring module
+module "monitoring" {
+  source = "../../modules/monitoring"
+
+  project_id = var.project_id
+
+  depends_on = [google_project_service.required_apis]
+}
