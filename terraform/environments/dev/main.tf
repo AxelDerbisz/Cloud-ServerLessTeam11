@@ -135,6 +135,7 @@ module "discord_proxy" {
   service_account_email   = module.iam.proxy_functions_sa_email
   allow_unauthenticated   = false
   gateway_service_account = module.iam.proxy_functions_sa_email
+  enable_gateway_invoker  = true
   memory                  = "256M"
   timeout                 = 60
 
