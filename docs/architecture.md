@@ -1,7 +1,5 @@
 # Architecture Diagram
 
-> **Level:** C4 Container Diagram — shows the deployed units and their interactions.
-
 ```mermaid
 graph TD
     classDef client fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#0d47a1
