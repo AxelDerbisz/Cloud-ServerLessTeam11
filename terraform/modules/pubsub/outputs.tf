@@ -13,9 +13,24 @@ output "snapshot_events_topic" {
   value       = google_pubsub_topic.snapshot_events.name
 }
 
-output "dead_letter_topic" {
-  description = "Dead letter topic name"
-  value       = google_pubsub_topic.dead_letter.name
+output "pixel_events_dead_letter_topic" {
+  description = "Pixel events dead letter topic name"
+  value       = google_pubsub_topic.pixel_events_dead_letter.name
+}
+
+output "session_events_dead_letter_topic" {
+  description = "Session events dead letter topic name"
+  value       = google_pubsub_topic.session_events_dead_letter.name
+}
+
+output "snapshot_events_dead_letter_topic" {
+  description = "Snapshot events dead letter topic name"
+  value       = google_pubsub_topic.snapshot_events_dead_letter.name
+}
+
+output "public_pixel_dead_letter_topic" {
+  description = "Public pixel dead letter topic name"
+  value       = google_pubsub_topic.public_pixel_dead_letter.name
 }
 
 output "public_pixel_topic" {

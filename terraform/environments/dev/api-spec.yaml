@@ -67,6 +67,12 @@ paths:
       x-google-backend:
         address: "${auth_handler_url}/auth/me"
         protocol: "h2"
+      parameters:
+        - name: Authorization
+          in: header
+          type: string
+          required: false
+          description: "Bearer token for authentication"
       responses:
         200:
           description: "User info"
