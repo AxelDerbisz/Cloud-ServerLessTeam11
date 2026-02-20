@@ -31,7 +31,7 @@ Stores individual pixel data. Document ID is the pixel coordinate (e.g., `5_12`)
 
 **Composite index:** `userId` ASC, `updatedAt` DESC, `__name__` DESC
 
-**Example** — `pixels/5_12`:
+**Example** - `pixels/5_12`:
 ```json
 {
   "x": 5,
@@ -66,7 +66,7 @@ Singleton document holding the active canvas session.
 | `resetAt` | string (ISO 8601) | When canvas was last reset (optional) |
 | `pixelsCleared` | number | Count of pixels deleted on last reset (optional) |
 
-**Example** — `sessions/current`:
+**Example** - `sessions/current`:
 ```json
 {
   "status": "active",
@@ -103,7 +103,7 @@ Per-user rate limiting. Document ID combines the user ID and the current minute 
 | `window` | number | Window minute value (`floor(unix / 60)`) |
 | `expiresAt` | string (RFC 3339) | Expiry timestamp (window + 120s) |
 
-**Example** — `rate_limits/123456789012345678_28473870`:
+**Example** - `rate_limits/123456789012345678_28473870`:
 ```json
 {
   "count": 5,
@@ -133,7 +133,7 @@ User profile and lifetime stats. Created on first pixel placement, updated on OA
 | `pixelCount` | number | Total pixels placed (lifetime) |
 | `createdAt` | string (RFC 3339) | When user doc was first created |
 
-**Example** — `users/123456789012345678`:
+**Example** - `users/123456789012345678`:
 ```json
 {
   "id": "123456789012345678",
@@ -171,19 +171,19 @@ User profile and lifetime stats. Created on first pixel placement, updated on OA
 Firestore (team11-database)
 │
 ├── pixels/
-│   ├── 0_0       → { x, y, color, userId, username, source, updatedAt }
-│   ├── 5_12      → { ... }
-│   └── 99_99     → { ... }
+│   ├── 0_0       -> { x, y, color, userId, username, source, updatedAt }
+│   ├── 5_12      -> { ... }
+│   └── 99_99     -> { ... }
 │
 ├── sessions/
-│   ├── current           → { status, startedAt, canvasWidth, canvasHeight, ... }
-│   └── archive_170843..  → { ..., status: "ended", endedAt }
+│   ├── current           -> { status, startedAt, canvasWidth, canvasHeight, ... }
+│   └── archive_170843..  -> { ..., status: "ended", endedAt }
 │
 ├── rate_limits/
-│   ├── 12345678_28473870 → { count, userId, window, expiresAt }
+│   ├── 12345678_28473870 -> { count, userId, window, expiresAt }
 │   └── ...
 │
 └── users/
-    ├── 123456789012345678 → { id, username, pixelCount, lastPixelAt, ... }
+    ├── 123456789012345678 -> { id, username, pixelCount, lastPixelAt, ... }
     └── ...
 ```
