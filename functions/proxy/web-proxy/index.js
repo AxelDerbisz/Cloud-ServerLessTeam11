@@ -123,6 +123,26 @@ async function placePixel(req, res, user) {
       return res.status(400).json({ error: 'Invalid color format. Use #RRGGBB' });
     }
 
+    // Here we check rate limit before publishing.
+    const rateLimitWindow = 60; // seconds
+    const rateLimitMax = 20; // pixels per window
+    const now = Math.floor(Date.now() / 1000);
+    const minute = Math.floor(now / rateLimitWindow);
+    const docID = `${user.sub}_${minute}`;
+
+    const rateLimitRef = firestore.collection('rate_limits').doc(docID);
+    const rateLimitDoc = await rateLimitRef.get();
+
+    if (rateLimitDoc.exists) {
+      const count = rateLimitDoc.data().count || 0;
+      if (count >= rateLimitMax) {
+        return res.status(429).json({
+          error: 'Rate limit exceeded',
+          message: `You can place ${rateLimitMax} pixels per minute`
+        });
+      }
+    }
+
     // Here we respond immediately.
     res.status(202).json({
       status: 'accepted',

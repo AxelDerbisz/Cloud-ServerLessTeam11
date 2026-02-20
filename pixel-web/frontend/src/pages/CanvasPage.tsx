@@ -1,10 +1,10 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback, useLayoutEffect } from "react";
 import { collection, onSnapshot, doc, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import { apiFetch } from "../api/api";
 import { useAuth } from "../auth/AuthContext";
 
-// Here we define available colors.
+//Here we define available colors.
 const COLORS = [
   "#000000",
   "#ffffff",
@@ -29,91 +29,57 @@ interface TooltipData {
   pixel: PixelData;
 }
 
-export default function Canvas() {
+export default function CanvasPage() {
   const { user, loading } = useAuth();
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Here we store all pixels with full data.
+  //Here we store pixels.
   const [pixels, setPixels] = useState<Record<string, PixelData>>({});
 
-  // Here we store the selected color.
+  //Here we store selected color.
   const [selectedColor, setSelectedColor] = useState("#000000");
 
-  // Here we store loading state.
   const [canvasLoading, setCanvasLoading] = useState(true);
-
-  // Here we store canvas dimensions from session.
   const [canvasWidth, setCanvasWidth] = useState(100);
   const [canvasHeight, setCanvasHeight] = useState(100);
 
-  // Here we store tooltip data for hover.
+  //Here we store tooltip.
   const [tooltip, setTooltip] = useState<TooltipData | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
 
-  // Here we load session dimensions once.
-  useEffect(() => {
-    const loadSession = async () => {
-      try {
-        const sessionDoc = await getDoc(doc(db, "sessions", "current"));
-        if (sessionDoc.exists()) {
-          const session = sessionDoc.data();
-          setCanvasWidth(session.canvasWidth || 100);
-          setCanvasHeight(session.canvasHeight || 100);
-        }
-      } catch (error) {
-        console.error("Failed to load session", error);
-      }
-    };
-    loadSession();
-  }, []);
+  //Here we store live cursor coordinates.
+  const [cursorCoords, setCursorCoords] = useState<{ x: number; y: number } | null>(null);
 
-  // Here we stream pixels from Firestore in real-time.
-  useEffect(() => {
-    const unsubscribe = onSnapshot(
-      collection(db, "pixels"),
-      (snapshot) => {
-        setPixels((prev) => {
-          const updated = { ...prev };
-          snapshot.docChanges().forEach((change) => {
-            const docId = change.doc.id;
-            if (change.type === "removed") {
-              delete updated[docId];
-            } else {
-              const data = change.doc.data();
-              console.log('Pixel loaded:', { docId, data });
-              updated[docId] = {
-                color: data.color,
-                username: data.username || "Unknown",
-                updatedAt: data.updatedAt || new Date().toISOString(),
-                userId: data.userId || "",
-              };
-            }
-          });
-          console.log('Total pixels loaded:', Object.keys(updated).length, 'Sample keys:', Object.keys(updated).slice(0, 5));
-          return updated;
-        });
-        setCanvasLoading(false);
-      },
-      (error) => {
-        console.error("Firestore stream error", error);
-        setCanvasLoading(false);
-      }
-    );
+  //Here we store zoom level.
+  const [zoom, setZoom] = useState(1.0);
 
-    return () => unsubscribe();
-  }, []);
+  //Here we store pan mode and offset.
+  const [isPanMode, setIsPanMode] = useState(false);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
 
-  // Here we render pixels to canvas whenever they change.
-  useEffect(() => {
+  //Here we store error message.
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  //Here we render canvas function.
+  const renderCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Calculate display size - fit to max 800px
-    const maxDisplaySize = 800;
-    const scale = Math.min(1, maxDisplaySize / Math.max(canvasWidth, canvasHeight));
+    const maxWidth = window.innerWidth * 0.95;
+    const maxHeight = window.innerHeight * 0.9;
+
+    const baseScale = Math.min(
+      maxWidth / canvasWidth,
+      maxHeight / canvasHeight
+    );
+
+    const scale = baseScale * zoom;
+
     const displayWidth = canvasWidth * scale;
     const displayHeight = canvasHeight * scale;
 
@@ -122,20 +88,90 @@ export default function Canvas() {
     canvas.style.width = `${displayWidth}px`;
     canvas.style.height = `${displayHeight}px`;
 
-    // Clear canvas
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-    // Draw pixels
-    Object.entries(pixels).forEach(([key, pixelData]) => {
+    Object.entries(pixels).forEach(([key, pixel]) => {
       const [x, y] = key.split("_").map(Number);
-      ctx.fillStyle = `#${pixelData.color}`;
+      ctx.fillStyle = `#${pixel.color}`;
       ctx.fillRect(x, y, 1, 1);
     });
-  }, [pixels, canvasWidth, canvasHeight]);
+  }, [pixels, canvasWidth, canvasHeight, zoom]);
 
-  // Here we handle mouse movement for hover tooltip.
+  //Here we load session.
+  useEffect(() => {
+    const loadSession = async () => {
+      const sessionDoc = await getDoc(doc(db, "sessions", "current"));
+      if (sessionDoc.exists()) {
+        const s = sessionDoc.data();
+        setCanvasWidth(s.canvasWidth || 100);
+        setCanvasHeight(s.canvasHeight || 100);
+      }
+    };
+    loadSession();
+  }, []);
+
+  //Here we stream pixels.
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "pixels"), (snapshot) => {
+      setPixels((prev) => {
+        const updated = { ...prev };
+        snapshot.docChanges().forEach((change) => {
+          const id = change.doc.id;
+          if (change.type === "removed") {
+            delete updated[id];
+          } else {
+            const data = change.doc.data();
+            updated[id] = {
+              color: data.color,
+              username: data.username || "Unknown",
+              updatedAt: data.updatedAt || new Date().toISOString(),
+              userId: data.userId || "",
+            };
+          }
+        });
+        return updated;
+      });
+      setCanvasLoading(false);
+    });
+
+    return () => unsub();
+  }, []);
+
+  //Here we add non-passive wheel listener after canvas loads.
+  useEffect(() => {
+    if (canvasLoading) return;
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const handleWheelEvent = (e: WheelEvent) => {
+      e.preventDefault();
+      const zoomDelta = e.deltaY > 0 ? 0.9 : 1.1;
+      setZoom((prev) => Math.max(0.1, Math.min(10, prev * zoomDelta)));
+    };
+
+    canvas.addEventListener('wheel', handleWheelEvent, { passive: false });
+
+    return () => {
+      canvas.removeEventListener('wheel', handleWheelEvent);
+    };
+  }, [canvasLoading]);
+
+  //Here we render pixels whenever dependencies change.
+  useLayoutEffect(() => {
+    if (!canvasLoading) {
+      renderCanvas();
+    }
+  }, [pixels, canvasWidth, canvasHeight, zoom, canvasLoading, renderCanvas]);
+
+  //Here we hover and track cursor.
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    //Here we handle pan dragging.
+    handlePanMove(e);
+
+    if (isPanMode) return;
+
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -146,15 +182,13 @@ export default function Canvas() {
     const pixelX = Math.floor((e.clientX - rect.left) * scaleX);
     const pixelY = Math.floor((e.clientY - rect.top) * scaleY);
 
+    setCursorCoords({ x: pixelX, y: pixelY });
     setMousePos({ x: e.clientX, y: e.clientY });
 
     const key = `${pixelX}_${pixelY}`;
     const pixelData = pixels[key];
 
-    console.log('Hover:', { pixelX, pixelY, key, hasData: !!pixelData, totalPixels: Object.keys(pixels).length });
-
     if (pixelData) {
-      console.log('Showing tooltip:', pixelData);
       setTooltip({ x: pixelX, y: pixelY, pixel: pixelData });
     } else {
       setTooltip(null);
@@ -164,14 +198,38 @@ export default function Canvas() {
   const handleMouseLeave = () => {
     setTooltip(null);
     setMousePos(null);
+    setCursorCoords(null);
   };
 
-  // Here we handle canvas clicks.
-  const handleCanvasClick = async (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!user) {
-      alert("You must be logged in to place pixels.");
-      return;
+
+  //Here we handle pan drag start.
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (isPanMode) {
+      setIsDragging(true);
+      setDragStart({ x: e.clientX - panOffset.x, y: e.clientY - panOffset.y });
     }
+  };
+
+  //Here we handle pan drag move.
+  const handlePanMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (isDragging && isPanMode) {
+      setPanOffset({
+        x: e.clientX - dragStart.x,
+        y: e.clientY - dragStart.y,
+      });
+    }
+  };
+
+  //Here we handle pan drag end.
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  //Here we place pixel.
+  const handleCanvasClick = async (
+    e: React.MouseEvent<HTMLCanvasElement>
+  ) => {
+    if (!user || isPanMode) return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -183,17 +241,21 @@ export default function Canvas() {
     const x = Math.floor((e.clientX - rect.left) * scaleX);
     const y = Math.floor((e.clientY - rect.top) * scaleY);
 
-    if (x < 0 || x >= canvasWidth || y < 0 || y >= canvasHeight) {
-      return;
-    }
+    //Here we optimistically update the pixel immediately.
+    const key = `${x}_${y}`;
+    const optimisticPixel: PixelData = {
+      color: selectedColor.replace(/^#/, ''),
+      username: user.username,
+      updatedAt: new Date().toISOString(),
+      userId: user.id,
+    };
 
-    // Optimistic update
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.fillStyle = selectedColor;
-      ctx.fillRect(x, y, 1, 1);
-    }
+    setPixels((prev) => ({
+      ...prev,
+      [key]: optimisticPixel,
+    }));
 
+    //Here we send to backend (Firestore will reconcile later).
     try {
       await apiFetch("/api/pixels", {
         method: "POST",
@@ -203,109 +265,246 @@ export default function Canvas() {
           color: selectedColor,
         }),
       });
-    } catch (err) {
-      console.error("Failed to place pixel", err);
+    } catch (error) {
+      //Here we revert on error by creating new object without the key.
+      setPixels((prev) => {
+        const { [key]: _, ...updated } = prev;
+        return updated;
+      });
+
+      //Here we show error message.
+      setErrorMessage("⚠️ Rate limit exceeded! (20 pixels/min max)");
+      setTimeout(() => setErrorMessage(null), 3000);
+
+      console.error("Failed to place pixel:", error);
     }
   };
 
-  // Here we format the timestamp.
-  const formatTime = (isoString: string) => {
-    try {
-      const date = new Date(isoString);
-      return date.toLocaleString();
-    } catch {
-      return "Unknown time";
-    }
-  };
-
-  // Here we wait for authentication to finish.
-  if (loading) {
-    return <div style={{ padding: "20px" }}>Loading authentication...</div>;
-  }
-
-  // Here we wait for canvas data.
-  if (canvasLoading) {
-    return <div style={{ padding: "20px" }}>Loading canvas...</div>;
+  if (loading || canvasLoading) {
+    return <div>Loading...</div>;
   }
 
   return (
-    <div style={{ padding: "20px", fontFamily: "Arial, sans-serif", position: "relative" }}>
-      {/* Here we show user info */}
-      <h2>
-        Welcome {user ? user.username : "Guest"}
-      </h2>
-      <p>Canvas size: {canvasWidth} x {canvasHeight} | Pixels placed: {Object.keys(pixels).length}</p>
+    <div
+      style={{
+        height: "100vh",
+        background: "linear-gradient(135deg,#020617,#0f172a)",
+        overflow: "hidden",
+        position: "relative",
+      }}
+    >
+      {/*Toolbar*/}
+      <div
+        style={{
+          position: "absolute",
+          top: 20,
+          left: 20,
+          background: "rgba(15,23,42,0.9)",
+          padding: 15,
+          borderRadius: 12,
+          backdropFilter: "blur(10px)",
+          color: "white",
+          zIndex: 10,
+        }}
+      >
+        <div style={{ marginBottom: 10 }}>
+          {user ? user.username : "Guest"}
+        </div>
 
-      {/* Here we show color picker */}
-      <div style={{ marginBottom: "20px" }}>
-        <h3 style={{ margin: "10px 0" }}>Select color:</h3>
-        <div style={{ display: "flex", gap: "5px" }}>
-          {COLORS.map((color) => (
+        <div style={{ display: "flex", gap: 6 }}>
+          {COLORS.map((c) => (
             <button
-              key={color}
-              onClick={() => setSelectedColor(color)}
+              key={c}
+              onClick={() => setSelectedColor(c)}
               style={{
-                backgroundColor: color,
-                width: 40,
-                height: 40,
-                border: selectedColor === color ? "3px solid #000" : "1px solid #999",
-                cursor: "pointer",
-                borderRadius: "4px",
+                background: c,
+                width: 30,
+                height: 30,
+                borderRadius: 6,
+                border:
+                  selectedColor === c
+                    ? "2px solid white"
+                    : "1px solid #444",
               }}
-              title={color}
             />
           ))}
         </div>
       </div>
 
-      {/* Here we render the canvas */}
-      <div style={{
-        border: "2px solid #999",
-        display: "inline-block",
-        background: "#f0f0f0",
-        borderRadius: "4px",
-        padding: "2px",
-        position: "relative",
-      }}>
-        <canvas
-          ref={canvasRef}
-          onClick={handleCanvasClick}
-          onMouseMove={handleMouseMove}
-          onMouseLeave={handleMouseLeave}
+      {/*Zoom controls*/}
+      <div
+        style={{
+          position: "absolute",
+          top: 20,
+          right: 20,
+          background: "rgba(15,23,42,0.9)",
+          padding: 15,
+          borderRadius: 12,
+          backdropFilter: "blur(10px)",
+          color: "white",
+          zIndex: 10,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+        }}
+      >
+        <button
+          onClick={() => setZoom((prev) => Math.min(10, prev * 1.2))}
           style={{
-            cursor: "crosshair",
-            imageRendering: "pixelated",
-            display: "block",
+            background: "rgba(255,255,255,0.1)",
+            border: "1px solid rgba(255,255,255,0.2)",
+            color: "white",
+            padding: "8px 12px",
+            borderRadius: 6,
+            cursor: "pointer",
+            fontSize: 16,
           }}
-        />
+        >
+          +
+        </button>
+        <div style={{ textAlign: "center", fontSize: 12 }}>
+          {Math.round(zoom * 100)}%
+        </div>
+        <button
+          onClick={() => setZoom((prev) => Math.max(0.1, prev * 0.8))}
+          style={{
+            background: "rgba(255,255,255,0.1)",
+            border: "1px solid rgba(255,255,255,0.2)",
+            color: "white",
+            padding: "8px 12px",
+            borderRadius: 6,
+            cursor: "pointer",
+            fontSize: 16,
+          }}
+        >
+          −
+        </button>
+        <button
+          onClick={() => {
+            setZoom(1);
+            setPanOffset({ x: 0, y: 0 });
+          }}
+          style={{
+            background: "rgba(255,255,255,0.1)",
+            border: "1px solid rgba(255,255,255,0.2)",
+            color: "white",
+            padding: "6px 8px",
+            borderRadius: 6,
+            cursor: "pointer",
+            fontSize: 11,
+          }}
+        >
+          Reset View
+        </button>
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.2)", margin: "8px 0" }} />
+        <button
+          onClick={() => setIsPanMode(!isPanMode)}
+          style={{
+            background: isPanMode ? "rgba(88,101,242,0.3)" : "rgba(255,255,255,0.1)",
+            border: isPanMode ? "1px solid rgba(88,101,242,0.5)" : "1px solid rgba(255,255,255,0.2)",
+            color: "white",
+            padding: "8px 12px",
+            borderRadius: 6,
+            cursor: "pointer",
+            fontSize: 20,
+          }}
+          title={isPanMode ? "Draw mode (click)" : "Pan mode (click)"}
+        >
+          {isPanMode ? "✏️" : "✋"}
+        </button>
       </div>
 
-      {/* Here we show the hover tooltip */}
-      {tooltip && mousePos && (
-        <div style={{
-          position: "fixed",
-          left: mousePos.x + 15,
-          top: mousePos.y + 15,
-          background: "rgba(0, 0, 0, 0.9)",
-          color: "#fff",
-          padding: "8px 12px",
-          borderRadius: "6px",
-          fontSize: "13px",
-          pointerEvents: "none",
-          zIndex: 1000,
-          boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
-          whiteSpace: "nowrap",
-        }}>
-          <div><strong>Position:</strong> ({tooltip.x}, {tooltip.y})</div>
-          <div><strong>Color:</strong> #{tooltip.pixel.color}</div>
-          <div><strong>Placed by:</strong> {tooltip.pixel.username}</div>
-          <div><strong>Time:</strong> {formatTime(tooltip.pixel.updatedAt)}</div>
+      {/*Live cursor coordinates*/}
+      {cursorCoords && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 20,
+            left: 20,
+            background: "rgba(0,0,0,0.7)",
+            color: "white",
+            padding: "8px 12px",
+            borderRadius: 8,
+            fontSize: 14,
+          }}
+        >
+          Cursor: ({cursorCoords.x}, {cursorCoords.y})
         </div>
       )}
 
-      {!user && (
-        <div style={{ marginTop: "20px", padding: "10px", background: "#fff3cd", borderRadius: "4px" }}>
-          <strong>Note:</strong> You must be logged in to place pixels.
+      {/*Canvas*/}
+      <div
+        style={{
+          height: "100%",
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+        }}
+      >
+        <div
+          style={{
+            transform: `translate(${panOffset.x}px, ${panOffset.y}px)`,
+            transition: isDragging ? "none" : "transform 0.1s ease-out",
+          }}
+        >
+          <canvas
+            ref={canvasRef}
+            onClick={handleCanvasClick}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={() => {
+              handleMouseLeave();
+              handleMouseUp();
+            }}
+            style={{
+              imageRendering: "pixelated",
+              cursor: isPanMode ? (isDragging ? "grabbing" : "grab") : "crosshair",
+            }}
+          />
+        </div>
+      </div>
+
+      {/*Pixel tooltip*/}
+      {tooltip && mousePos && (
+        <div
+          style={{
+            position: "fixed",
+            left: mousePos.x + 15,
+            top: mousePos.y + 15,
+            background: "rgba(0,0,0,0.9)",
+            padding: "10px",
+            borderRadius: 8,
+            color: "white",
+            fontSize: 13,
+            pointerEvents: "none",
+          }}
+        >
+          <div><strong>({tooltip.x}, {tooltip.y})</strong></div>
+          <div>#{tooltip.pixel.color}</div>
+          <div>{tooltip.pixel.username}</div>
+        </div>
+      )}
+
+      {/*Error notification*/}
+      {errorMessage && (
+        <div
+          style={{
+            position: "fixed",
+            top: 100,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "rgba(220, 38, 38, 0.95)",
+            color: "white",
+            padding: "15px 25px",
+            borderRadius: 12,
+            boxShadow: "0 10px 40px rgba(0,0,0,0.5)",
+            fontSize: 14,
+            fontWeight: 600,
+            zIndex: 1000,
+          }}
+        >
+          {errorMessage}
         </div>
       )}
     </div>
