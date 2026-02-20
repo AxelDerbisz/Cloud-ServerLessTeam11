@@ -108,6 +108,11 @@ paths:
         address: "${web_proxy_url}/api/pixels"
         protocol: "h2"
       parameters:
+        - name: Authorization
+          in: header
+          type: string
+          required: false
+          description: "Bearer token for authentication"
         - name: body
           in: body
           required: true
@@ -123,18 +128,21 @@ paths:
       responses:
         202:
           description: "Pixel placement accepted"
+          headers:
+            Access-Control-Allow-Origin:
+              type: string
         401:
           description: "Unauthorized"
         400:
           description: "Invalid pixel data"
+        429:
+          description: "Rate limit exceeded"
     options:
       summary: "CORS preflight for /api/pixels"
       operationId: "pixelsCors"
-      security: []
       x-google-backend:
         address: "${web_proxy_url}/api/pixels"
         protocol: "h2"
-        disable_auth: true
       responses:
         204:
           description: "CORS preflight response"
@@ -153,11 +161,9 @@ paths:
     options:
       summary: "CORS preflight for /api/canvas"
       operationId: "canvasCors"
-      security: []
       x-google-backend:
         address: "${web_proxy_url}/api/canvas"
         protocol: "h2"
-        disable_auth: true
       responses:
         204:
           description: "CORS preflight response"
